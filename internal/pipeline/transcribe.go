@@ -34,6 +34,13 @@ func Transcribe(ctx context.Context, cfg *Config, audioPath string, logw io.Writ
 		runErr = runOpenAIWhisper(ctx, cfg, audioPath, tmpDir, logw)
 	} else {
 		runErr = runFasterWhisper(ctx, cfg, audioPath, tmpDir, logw)
+		// whisper-ctranslate2 may exit 0 on silent CUDA errors without writing output.
+		if runErr == nil {
+			expected := filepath.Join(tmpDir, baseName+".txt")
+			if _, statErr := os.Stat(expected); statErr != nil {
+				runErr = fmt.Errorf("faster-whisper produced no output (possible CUDA/library error)")
+			}
+		}
 		if runErr != nil {
 			fmt.Fprintf(logw, "[vidscribe] faster-whisper failed (%v) — falling back to openai-whisper\n", runErr)
 			runErr = runOpenAIWhisper(ctx, cfg, audioPath, tmpDir, logw)
