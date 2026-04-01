@@ -1,6 +1,6 @@
 # vidscribe
 
-Video transcription via **yt-dlp** + **faster-whisper** — as CLI or MCP server for Claude.
+Video transcription via **yt-dlp** + **whisper-ctranslate2** (faster-whisper engine) — as CLI or MCP server for Claude.
 
 ## Requirements
 
@@ -46,7 +46,7 @@ Add to `~/.claude.json`:
 | Tool | Description |
 |------|-------------|
 | `transcribe_video` | Download + transcribe a video URL |
-| `check_dependencies` | Verify uvx, ffmpeg, yt-dlp, whisper |
+| `check_dependencies` | Verify uvx, ffmpeg, yt-dlp, whisper-ctranslate2 |
 | `list_supported_sites` | List all 1000+ yt-dlp platforms |
 
 ## Flags

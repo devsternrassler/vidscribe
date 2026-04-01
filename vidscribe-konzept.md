@@ -46,8 +46,8 @@ Repository: eigenes GitHub-Repo (nicht im claude-app-Monorepo)
 | RAM-Verbrauch | höher | deutlich geringer |
 | Wort-Timestamps | nein | ja |
 | Quantisierung (int8) | nein | ja (noch schneller auf CPU) |
-| CLI-Befehl | `whisper` | `faster-whisper` |
-| uvx-Aufruf | `uvx --from openai-whisper whisper` | `uvx --from faster-whisper faster-whisper` |
+| CLI-Befehl | `whisper` | `whisper-ctranslate2` |
+| uvx-Aufruf | `uvx --from openai-whisper whisper` | `uvx --from whisper-ctranslate2 whisper-ctranslate2 --device cpu --compute_type int8` |
 
 **Entscheidung:** faster-whisper als Standard, openai-whisper als Fallback-Option (`--engine openai`).
 
@@ -130,7 +130,7 @@ Alle als externe Subprozesse — kein eingebettetes Go-Whisper oder yt-dlp:
 |------|-----------|-------------|
 | `yt-dlp` | Audio-Download | `uvx yt-dlp` (kein Install nötig) |
 | `ffmpeg` | Audio-Konvertierung | `apt install ffmpeg` |
-| `faster-whisper` | Transkription | `uvx --from faster-whisper faster-whisper` |
+| `whisper-ctranslate2` | Transkription (faster-whisper-Engine) | `uvx --from whisper-ctranslate2 whisper-ctranslate2` |
 
 `check_dependencies()` prüft Verfügbarkeit und gibt klare Fehlermeldungen.
 
