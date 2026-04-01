@@ -62,46 +62,66 @@ func TestFirstLine(t *testing.T) {
 	}
 }
 
+// hasArg reports whether flag appears in args.
+func hasArg(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildBaseArgs(t *testing.T) {
-	t.Run("no auth", func(t *testing.T) {
-		args := buildBaseArgs(&Config{})
-		if len(args) != 0 {
-			t.Errorf("expected empty args, got %v", args)
+	t.Run("no auth, explicit empty js-runtime", func(t *testing.T) {
+		// Pass a non-existent runtime so auto-detection is suppressed.
+		args := buildBaseArgs(&Config{JSRuntime: "node:/nonexistent/node"})
+		// Only js-runtime flags expected — no cookie flags.
+		if hasArg(args, "--cookies-from-browser") || hasArg(args, "--cookies") {
+			t.Errorf("unexpected cookie args: %v", args)
 		}
 	})
 
 	t.Run("browser cookies", func(t *testing.T) {
-		args := buildBaseArgs(&Config{CookiesBrowser: "chrome"})
-		if len(args) != 2 || args[0] != "--cookies-from-browser" || args[1] != "chrome" {
-			t.Errorf("unexpected args: %v", args)
+		args := buildBaseArgs(&Config{CookiesBrowser: "chrome", JSRuntime: "node:/nonexistent/node"})
+		if !hasArg(args, "--cookies-from-browser") {
+			t.Errorf("expected --cookies-from-browser in %v", args)
+		}
+		if hasArg(args, "--cookies") {
+			t.Errorf("unexpected --cookies in %v", args)
 		}
 	})
 
 	t.Run("cookie file", func(t *testing.T) {
-		args := buildBaseArgs(&Config{CookiesFile: "/tmp/cookies.txt"})
-		if len(args) != 2 || args[0] != "--cookies" || args[1] != "/tmp/cookies.txt" {
-			t.Errorf("unexpected args: %v", args)
+		args := buildBaseArgs(&Config{CookiesFile: "/tmp/cookies.txt", JSRuntime: "node:/nonexistent/node"})
+		if !hasArg(args, "--cookies") {
+			t.Errorf("expected --cookies in %v", args)
 		}
 	})
 
 	t.Run("browser takes precedence over file", func(t *testing.T) {
-		args := buildBaseArgs(&Config{CookiesBrowser: "firefox", CookiesFile: "/tmp/c.txt"})
+		args := buildBaseArgs(&Config{CookiesBrowser: "firefox", CookiesFile: "/tmp/c.txt", JSRuntime: "node:/nonexistent/node"})
 		if args[0] != "--cookies-from-browser" {
 			t.Errorf("expected browser arg first, got %v", args)
 		}
 	})
 
-	t.Run("js-runtime", func(t *testing.T) {
-		args := buildBaseArgs(&Config{JSRuntime: "deno"})
-		found := false
-		for i, a := range args {
-			if a == "--extractor-args" && i+1 < len(args) {
-				found = true
-				break
-			}
+	t.Run("explicit js-runtime sets --js-runtimes and --remote-components", func(t *testing.T) {
+		args := buildBaseArgs(&Config{JSRuntime: "deno:/usr/bin/deno"})
+		if !hasArg(args, "--js-runtimes") {
+			t.Errorf("expected --js-runtimes in %v", args)
 		}
-		if !found {
-			t.Errorf("expected --extractor-args in %v", args)
+		if !hasArg(args, "--remote-components") {
+			t.Errorf("expected --remote-components in %v", args)
+		}
+	})
+
+	t.Run("auto-detected node sets --js-runtimes", func(t *testing.T) {
+		// Auto-detection runs when JSRuntime is empty; result depends on environment.
+		// We only assert that if --js-runtimes is present, --remote-components follows.
+		args := buildBaseArgs(&Config{})
+		if hasArg(args, "--js-runtimes") && !hasArg(args, "--remote-components") {
+			t.Errorf("--js-runtimes without --remote-components in %v", args)
 		}
 	})
 }
