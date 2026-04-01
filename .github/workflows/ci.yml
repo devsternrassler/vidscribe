@@ -23,6 +23,9 @@ jobs:
 
       - run: go vet ./...
 
+      - name: Unit tests
+        run: go test ./... -count=1
+
       - name: Build (all platforms)
         run: |
           GOOS=linux   GOARCH=amd64  go build -o /dev/null .
