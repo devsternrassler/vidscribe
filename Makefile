@@ -29,7 +29,7 @@ test-bench:
 
 # All tests with extended timeout
 test-all:
-	go test -tags=e2e ./... -count=1 -timeout 600s
+	go test -tags=e2e ./... -count=1 -v -timeout 600s
 
 vet:
 	go vet ./...
