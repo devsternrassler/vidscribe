@@ -1,8 +1,10 @@
 package pipeline
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSafeTitle(t *testing.T) {
@@ -51,6 +53,56 @@ func TestSafeTitle(t *testing.T) {
 				t.Errorf("SafeTitle(%q) = %q, want substring %q", tt.meta.Title, got, tt.contains)
 			}
 		})
+	}
+}
+
+func TestConfigNormalizeRejectsUnknownValues(t *testing.T) {
+	tests := []Config{
+		{Profile: "mystery", Formats: []string{"txt"}},
+		{Profile: "custom", Engine: "magic", Formats: []string{"txt"}},
+		{Profile: "custom", Engine: "faster", Model: "small", Device: "cpu", ComputeType: "int8", Formats: []string{"pdf"}},
+		{Profile: "custom", Engine: "faster", Model: "small", Device: "cpu", ComputeType: "float16", Formats: []string{"txt"}},
+		{Profile: "custom", Engine: "faster", Model: "small", Device: "cpu", ComputeType: "int8", Language: "not a language", Formats: []string{"txt"}},
+		{Profile: "custom", Engine: "faster", Model: "small", Device: "cpu", ComputeType: "int8", MaxFileSize: "--exec", Formats: []string{"txt"}},
+		{Profile: "custom", Engine: "faster", Model: "small", Device: "cpu", ComputeType: "int8", JSRuntime: "python:/tmp/x", Formats: []string{"txt"}},
+	}
+	for i := range tests {
+		if err := tests[i].Normalize(context.Background()); err == nil {
+			t.Errorf("case %d: expected validation error", i)
+		}
+	}
+}
+
+func TestConfigNormalizeGPUFreeProfile(t *testing.T) {
+	cfg := &Config{Profile: "gpu-free", Formats: []string{"txt"}}
+	if err := cfg.Normalize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Engine != "parakeet" || cfg.Device != "cpu" || cfg.ComputeType != "int8" {
+		t.Fatalf("unexpected profile resolution: %+v", cfg)
+	}
+	if !cfg.HasFormat("manifest") {
+		t.Fatal("manifest must always be enabled")
+	}
+}
+
+func TestConfigNormalizeBalancedWithoutCUDAUsesParakeet(t *testing.T) {
+	original := cudaProbe
+	cudaProbe = func(context.Context) bool { return false }
+	t.Cleanup(func() { cudaProbe = original })
+	cfg := &Config{Profile: "balanced", Formats: []string{"txt"}}
+	if err := cfg.Normalize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Engine != "parakeet" || cfg.Device != "cpu" {
+		t.Fatalf("unexpected CPU balance: %+v", cfg)
+	}
+}
+
+func TestSafeTitleIncludesIDAndPreservesUTF8(t *testing.T) {
+	got := (&Metadata{Title: strings.Repeat("ä", 80), ID: "xyz"}).SafeTitle()
+	if !strings.HasSuffix(got, " [xyz]") || !utf8.ValidString(got) {
+		t.Fatalf("unsafe title: %q", got)
 	}
 }
 

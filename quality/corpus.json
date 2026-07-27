@@ -1,0 +1,18 @@
+{
+  "schema": "vidscribe-quality-corpus/v1",
+  "thresholds": {
+    "max_mean_wer": 0.10,
+    "max_mean_cer": 0.05,
+    "min_keyword_recall": 1.00
+  },
+  "cases": [
+    {
+      "id": "me-at-the-zoo-en-short",
+      "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+      "language": "en",
+      "category": "short-natural-speech",
+      "reference": "All right, so here we are in front of the elephants. The cool thing about these guys is that they have really, really, really long trunks. And that's cool. And that's pretty much all there is to say.",
+      "keywords": ["elephants", "long trunks"]
+    }
+  ]
+}

@@ -1,15 +1,23 @@
 package pipeline
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+
+	"github.com/sternrassler/vidscribe/internal/runtimeenv"
+	"github.com/sternrassler/vidscribe/internal/subprocess"
 )
+
+var captionTag = regexp.MustCompile(`<[^>]+>`)
 
 // parakeetScript runs NVIDIA parakeet-tdt-0.6b-v3 via onnx-asr on CPU.
 // Long audio is chunked with the built-in Silero VAD (required: the model
@@ -17,7 +25,7 @@ import (
 // timestamps. argv: <wav-path> <segments-json-out>.
 const parakeetScript = `import json, sys
 import onnx_asr
-model = onnx_asr.load_model("nemo-parakeet-tdt-0.6b-v3")
+model = onnx_asr.load_model("` + runtimeenv.ParakeetModel + `")
 vad = onnx_asr.load_vad("silero")
 segs = [{"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
         for s in model.with_vad(vad).recognize(sys.argv[1])]
@@ -42,7 +50,7 @@ func runParakeet(ctx context.Context, cfg *Config, audioPath, outDir string, log
 
 	// onnx-asr reads wav only; the pipeline downloads mp3 → convert to 16k mono.
 	wavPath := filepath.Join(outDir, "parakeet-input.wav")
-	ffmpeg := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-y",
+	ffmpeg := subprocess.CommandContext(ctx, "ffmpeg", "-v", "error", "-y",
 		"-i", audioPath, "-vn", "-ar", "16000", "-ac", "1", wavPath)
 	if out, err := ffmpeg.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg wav conversion failed: %s", firstLine(strings.TrimSpace(string(out))))
@@ -51,7 +59,7 @@ func runParakeet(ctx context.Context, cfg *Config, audioPath, outDir string, log
 
 	segFile := filepath.Join(outDir, "parakeet-segments.json")
 	args := []string{
-		"--with", "onnx-asr[cpu,hub]",
+		"--with", runtimeenv.ONNXASR,
 		"python3", "-c", parakeetScript,
 		wavPath, segFile,
 	}
@@ -85,6 +93,79 @@ func parseSegmentsFile(path string) ([]segment, error) {
 		return nil, fmt.Errorf("parakeet produced no segments")
 	}
 	return segs, nil
+}
+
+func parseVTTFile(path string) ([]segment, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read captions: %w", err)
+	}
+	defer f.Close()
+	var segs []segment
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.Contains(line, "-->") {
+			continue
+		}
+		parts := strings.SplitN(line, "-->", 2)
+		start, err1 := parseVTTClock(strings.TrimSpace(parts[0]))
+		endField := strings.Fields(strings.TrimSpace(parts[1]))
+		if len(endField) == 0 {
+			continue
+		}
+		end, err2 := parseVTTClock(endField[0])
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		var textLines []string
+		for scanner.Scan() {
+			text := strings.TrimSpace(scanner.Text())
+			if text == "" {
+				break
+			}
+			textLines = append(textLines, text)
+		}
+		text := strings.TrimSpace(html.UnescapeString(captionTag.ReplaceAllString(strings.Join(textLines, " "), "")))
+		if text == "" {
+			continue
+		}
+		if len(segs) > 0 && segs[len(segs)-1].Text == text {
+			segs[len(segs)-1].End = end
+			continue
+		}
+		segs = append(segs, segment{Start: start, End: end, Text: text})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan captions: %w", err)
+	}
+	if len(segs) == 0 {
+		return nil, fmt.Errorf("captions contained no transcript cues")
+	}
+	return segs, nil
+}
+
+func parseVTTClock(value string) (float64, error) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 && len(parts) != 3 {
+		return 0, fmt.Errorf("invalid VTT time %q", value)
+	}
+	seconds, err := strconv.ParseFloat(parts[len(parts)-1], 64)
+	if err != nil {
+		return 0, err
+	}
+	minutes, err := strconv.ParseFloat(parts[len(parts)-2], 64)
+	if err != nil {
+		return 0, err
+	}
+	hours := 0.0
+	if len(parts) == 3 {
+		hours, err = strconv.ParseFloat(parts[0], 64)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return hours*3600 + minutes*60 + seconds, nil
 }
 
 // writeParakeetOutputs materializes txt/srt/vtt/json for the given segments.

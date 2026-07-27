@@ -111,22 +111,22 @@ func TestBuildBaseArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("explicit js-runtime sets --js-runtimes and --remote-components", func(t *testing.T) {
+	t.Run("explicit js-runtime does not enable remote code downloads", func(t *testing.T) {
 		args := buildBaseArgs(&Config{JSRuntime: "deno:/usr/bin/deno"})
 		if !hasArg(args, "--js-runtimes") {
 			t.Errorf("expected --js-runtimes in %v", args)
 		}
-		if !hasArg(args, "--remote-components") {
-			t.Errorf("expected --remote-components in %v", args)
+		if hasArg(args, "--remote-components") {
+			t.Errorf("unexpected --remote-components in %v", args)
 		}
 	})
 
 	t.Run("auto-detected node sets --js-runtimes", func(t *testing.T) {
 		// Auto-detection runs when JSRuntime is empty; result depends on environment.
-		// We only assert that if --js-runtimes is present, --remote-components follows.
+		// Remote components remain disabled even when a runtime is available.
 		args := buildBaseArgs(&Config{})
-		if hasArg(args, "--js-runtimes") && !hasArg(args, "--remote-components") {
-			t.Errorf("--js-runtimes without --remote-components in %v", args)
+		if hasArg(args, "--remote-components") {
+			t.Errorf("unexpected remote component download in %v", args)
 		}
 	})
 }

@@ -19,7 +19,7 @@ func TestWriteMD(t *testing.T) {
 		UploadDate: "20240315",
 	}
 
-	if err := writeMD(dst, meta, "Hello world transcript."); err != nil {
+	if err := writeMD(dst, meta, testExecution(), "Hello world transcript."); err != nil {
 		t.Fatalf("writeMD: %v", err)
 	}
 
@@ -54,7 +54,7 @@ func TestWriteMDFallbackToUploader(t *testing.T) {
 		Duration: 60,
 	}
 
-	if err := writeMD(dst, meta, "text"); err != nil {
+	if err := writeMD(dst, meta, testExecution(), "text"); err != nil {
 		t.Fatalf("writeMD: %v", err)
 	}
 
@@ -62,6 +62,10 @@ func TestWriteMDFallbackToUploader(t *testing.T) {
 	if !strings.Contains(string(data), "SomeUploader") {
 		t.Errorf("expected Uploader as fallback, got:\n%s", data)
 	}
+}
+
+func testExecution() *ExecutionInfo {
+	return &ExecutionInfo{ActualEngine: "faster", Model: "small", Device: "cpu", ComputeType: "int8", DetectedLanguage: "en"}
 }
 
 func TestWriteOutputs(t *testing.T) {
@@ -97,11 +101,15 @@ func TestWriteOutputs(t *testing.T) {
 		t.Fatalf("WriteOutputs: %v", err)
 	}
 
-	// Expect txt, srt, md — not vtt or json (not requested).
-	wantExts := map[string]bool{"txt": true, "srt": true, "md": true}
+	// Expect txt, srt, md and the mandatory provenance manifest.
+	wantExts := map[string]bool{"txt": true, "srt": true, "md": true, "manifest": true}
 	gotExts := map[string]bool{}
 	for _, p := range paths {
-		gotExts[filepath.Ext(p)[1:]] = true
+		ext := filepath.Ext(p)[1:]
+		if strings.HasSuffix(p, ".manifest.json") {
+			ext = "manifest"
+		}
+		gotExts[ext] = true
 	}
 
 	for ext := range wantExts {
@@ -120,6 +128,49 @@ func TestWriteOutputs(t *testing.T) {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("output file missing: %s", p)
 		}
+	}
+	manifestPath := filepath.Join(outDir, "My Video [abc].manifest.json")
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"vidscribe-manifest/v1", "actual_engine", "detected_language"} {
+		if !strings.Contains(string(manifest), want) {
+			t.Errorf("manifest missing %q: %s", want, manifest)
+		}
+	}
+}
+
+func TestWriteOutputsFailsWhenRequestedFormatMissing(t *testing.T) {
+	txDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(txDir, "clip.txt"), []byte("text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := WriteOutputs(&Config{OutputDir: t.TempDir(), Formats: []string{"srt"}},
+		&TranscribeResult{TempDir: txDir, BaseName: "clip", ActualEngine: "faster"}, &Metadata{ID: "id", Title: "Title"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "did not produce required") {
+		t.Fatalf("expected fail-loud format error, got %v", err)
+	}
+}
+
+func TestWriteOutputsRequiresExplicitOverwrite(t *testing.T) {
+	txDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(txDir, "clip.txt"), []byte("text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := t.TempDir()
+	cfg := &Config{OutputDir: outDir, Formats: []string{"txt"}}
+	tx := &TranscribeResult{TempDir: txDir, BaseName: "clip", ActualEngine: "faster"}
+	meta := &Metadata{ID: "id", Title: "Title"}
+	if _, err := WriteOutputs(cfg, tx, meta, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteOutputs(cfg, tx, meta, nil); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected collision error, got %v", err)
+	}
+	cfg.Overwrite = true
+	if _, err := WriteOutputs(cfg, tx, meta, nil); err != nil {
+		t.Fatalf("explicit overwrite failed: %v", err)
 	}
 }
 

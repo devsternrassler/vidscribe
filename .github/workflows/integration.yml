@@ -17,11 +17,21 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.10.9"
 
       - name: Install ffmpeg
         run: sudo apt-get install -y ffmpeg
 
       - name: Run smoke tests (unit + smoke)
         run: go test -tags=smoke ./... -v -count=1 -timeout 120s
+
+      - name: Run real CPU engine and captions E2E
+        run: >-
+          go test -tags=e2e ./internal/pipeline -v -count=1 -timeout 900s
+          -run 'TestE2E_(FasterWhisper_CPU|Parakeet|CaptionsAuto)$'
+
+      - name: Run transcript quality gate
+        run: make test-quality

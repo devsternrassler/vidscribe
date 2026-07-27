@@ -1,4 +1,4 @@
-.PHONY: build test test-v test-smoke test-e2e test-bench test-all vet lint clean release-dry run
+.PHONY: build test test-v test-smoke test-e2e test-bench test-all test-quality vet vuln lint clean release-dry run
 
 BIN := vidscribe
 
@@ -33,6 +33,12 @@ test-all:
 
 vet:
 	go vet ./...
+
+vuln:
+	govulncheck ./...
+
+test-quality:
+	bash scripts/quality-smoke.sh
 
 lint: vet
 	go mod tidy

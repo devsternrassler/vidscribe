@@ -60,6 +60,26 @@ func TestTranscribeVideo_InvalidScheme(t *testing.T) {
 	}
 }
 
+func TestTranscribeVideo_PrivateURL(t *testing.T) {
+	res, err := handleTranscribeVideo(context.Background(), makeReq(map[string]any{"url": "http://127.0.0.1/video"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(toolResultText(t, res), "private") {
+		t.Fatalf("private URL was not rejected: %s", toolResultText(t, res))
+	}
+}
+
+func TestTranscribeVideo_InvalidEngineFailsLoud(t *testing.T) {
+	res, err := handleTranscribeVideo(context.Background(), makeReq(map[string]any{"url": "https://example.com/video", "engine": "magic"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(toolResultText(t, res), "unsupported engine") {
+		t.Fatalf("invalid engine was not rejected: %s", toolResultText(t, res))
+	}
+}
+
 func TestTranscribeVideo_UnsupportedBrowser(t *testing.T) {
 	res, err := handleTranscribeVideo(context.Background(), makeReq(map[string]any{
 		"url":             "https://example.com/video",

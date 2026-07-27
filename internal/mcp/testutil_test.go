@@ -14,10 +14,11 @@ import (
 
 // mcpSession manages a running vidscribe --mcp subprocess for protocol-level tests.
 type mcpSession struct {
-	cmd    *exec.Cmd
-	enc    *json.Encoder
-	dec    *bufio.Scanner
-	nextID int
+	cmd        *exec.Cmd
+	enc        *json.Encoder
+	dec        *bufio.Scanner
+	nextID     int
+	outputRoot string
 }
 
 // startMCPServer builds the vidscribe binary and starts it in --mcp mode.
@@ -29,7 +30,9 @@ func startMCPServer(t *testing.T) *mcpSession {
 		t.Skipf("could not build binary: %v\n%s", err, out)
 	}
 
+	outputRoot := t.TempDir()
 	cmd := exec.Command(bin, "--mcp")
+	cmd.Env = append(os.Environ(), "VIDSCRIBE_OUTPUT_ROOT="+outputRoot)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
@@ -50,9 +53,10 @@ func startMCPServer(t *testing.T) *mcpSession {
 	})
 
 	s := &mcpSession{
-		cmd: cmd,
-		enc: json.NewEncoder(stdin),
-		dec: bufio.NewScanner(stdout),
+		cmd:        cmd,
+		enc:        json.NewEncoder(stdin),
+		dec:        bufio.NewScanner(stdout),
+		outputRoot: outputRoot,
 	}
 	s.dec.Buffer(make([]byte, 1<<20), 1<<20)
 	return s
@@ -142,6 +146,32 @@ func (s *mcpSession) callToolTimeout(t *testing.T, name string, args map[string]
 		t.Fatalf("tools/call RPC error: %s", resp.Error.Message)
 	}
 	return extractResult(t, resp.Result)
+}
+
+func (s *mcpSession) callToolWithProgress(t *testing.T, name string, args map[string]any, timeout time.Duration) (text string, isError bool, progress int) {
+	t.Helper()
+	s.nextID++
+	id := s.nextID
+	_ = s.enc.Encode(rpcMsg{JSONRPC: "2.0", ID: &id, Method: "tools/call", Params: map[string]any{
+		"name": name, "arguments": args, "_meta": map[string]any{"progressToken": "e2e-progress"},
+	}})
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		response := s.recvTimeout(t, time.Until(deadline))
+		if response.Method == "notifications/progress" {
+			progress++
+			continue
+		}
+		if response.ID != nil && *response.ID == id {
+			if response.Error != nil {
+				t.Fatalf("tools/call RPC error: %s", response.Error.Message)
+			}
+			text, isError = extractResult(t, response.Result)
+			return text, isError, progress
+		}
+	}
+	t.Fatal("timeout waiting for tool result")
+	return "", true, progress
 }
 
 // extractResult parses a tool call result into text and isError.

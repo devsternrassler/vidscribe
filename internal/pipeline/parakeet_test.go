@@ -107,3 +107,29 @@ func TestWriteParakeetOutputs(t *testing.T) {
 		t.Errorf("json output missing text/segments keys: %s", jsonData)
 	}
 }
+
+func TestParseVTTFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "captions.vtt")
+	content := "WEBVTT\n\n00:00:00.100 --> 00:00:01.500\n<c>Hello &amp; welcome</c>\n\n00:01.500 --> 00:03.000\nHello &amp; welcome\n\n00:03.000 --> 00:04.000\nNext line\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	segs, err := parseVTTFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segs) != 2 || segs[0].Text != "Hello & welcome" || segs[0].End != 3 {
+		t.Fatalf("unexpected segments: %+v", segs)
+	}
+}
+
+func TestDetectProvenance(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "clip.json"), []byte(`{"language":"de","segments":[{"avg_logprob":-0.1},{"avg_logprob":-0.3}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	language, confidence := detectProvenance(dir, "clip", "auto")
+	if language != "de" || confidence == nil || *confidence <= 0 || *confidence > 1 {
+		t.Fatalf("unexpected provenance: %s %v", language, confidence)
+	}
+}
