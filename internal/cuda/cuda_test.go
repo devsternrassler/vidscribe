@@ -39,7 +39,7 @@ func TestScriptConstants(t *testing.T) {
 }
 
 func TestUvxCublasFlag(t *testing.T) {
-	if UvxCublasFlag != "nvidia-cublas-cu12" {
-		t.Errorf("UvxCublasFlag = %q, want nvidia-cublas-cu12", UvxCublasFlag)
+	if !strings.HasPrefix(UvxCublasFlag, "nvidia-cublas-cu12==") {
+		t.Errorf("UvxCublasFlag = %q, want a pinned nvidia-cublas-cu12 package", UvxCublasFlag)
 	}
 }

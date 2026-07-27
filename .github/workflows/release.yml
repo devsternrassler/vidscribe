@@ -22,6 +22,15 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Verify release source
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+          go vet ./...
+          go test ./... -count=1
+          go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+          govulncheck ./...
+
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser

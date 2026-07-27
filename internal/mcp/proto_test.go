@@ -61,11 +61,31 @@ func TestProto_ToolsList(t *testing.T) {
 		if !hasURLRequired {
 			t.Errorf("transcribe_video: 'url' not in required list %v", tool.InputSchema.Required)
 		}
-		for _, param := range []string{"model", "language", "cookies_browser", "cookies_file", "engine", "format", "js_runtime", "device", "compute_type"} {
+		for _, param := range []string{"profile", "model", "language", "cookies_browser", "cookies_file", "engine", "format", "js_runtime", "device", "compute_type", "captions", "allow_fallback", "max_duration", "max_filesize", "overwrite", "word_timestamps"} {
 			if _, ok := tool.InputSchema.Properties[param]; !ok {
 				t.Errorf("transcribe_video: optional param %q missing from schema", param)
 			}
 		}
+	}
+}
+
+func TestProto_ServerUsesBuildVersion(t *testing.T) {
+	s := startMCPServer(t)
+	s.send("initialize", map[string]any{
+		"protocolVersion": "2024-11-05", "capabilities": map[string]any{},
+		"clientInfo": map[string]any{"name": "test", "version": "1"},
+	})
+	response := s.recv(t)
+	var result struct {
+		ServerInfo struct {
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+	}
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ServerInfo.Version != "dev" {
+		t.Fatalf("server version=%q, want dev build version", result.ServerInfo.Version)
 	}
 }
 

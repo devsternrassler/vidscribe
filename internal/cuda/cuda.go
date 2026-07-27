@@ -1,7 +1,19 @@
 package cuda
 
+import (
+	"runtime"
+
+	"github.com/sternrassler/vidscribe/internal/runtimeenv"
+)
+
 // UvxCublasFlag is the pip package name injected via "uvx --with" to provide libcublas.so.12.
-const UvxCublasFlag = "nvidia-cublas-cu12"
+const UvxCublasFlag = runtimeenv.NvidiaCublas
+
+// NeedsBundledCublas reports whether the Linux-only wheel injection is valid.
+// Windows CUDA uses the native DLL search path; macOS has no CUDA wheel.
+func NeedsBundledCublas(device string) bool {
+	return device == "cuda" && runtime.GOOS == "linux"
+}
 
 // cublasLDSetup is the shared Python preamble that locates nvidia-cublas-cu12's lib
 // directory and prepends it to LD_LIBRARY_PATH.

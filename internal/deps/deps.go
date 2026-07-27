@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sternrassler/vidscribe/internal/cuda"
+	"github.com/sternrassler/vidscribe/internal/runtimeenv"
 )
 
 // Check verifies that the minimum required tools are in PATH.
@@ -45,18 +46,18 @@ func Report(engine string) []DepStatus {
 	whisperProbe := func() DepStatus {
 		switch engine {
 		case "openai":
-			return probeUvxFrom(ctx, "openai-whisper", "openai-whisper", "whisper", "--help")
+			return probeUvxFrom(ctx, "openai-whisper", runtimeenv.OpenAIWhisper, "whisper", "--help")
 		case "parakeet":
-			return probeUvxFrom(ctx, "onnx-asr", "onnx-asr[cpu,hub]", "python3", "-c", "import onnx_asr; print('usage')")
+			return probeUvxFrom(ctx, "onnx-asr", runtimeenv.ONNXASR, "python3", "-c", "import onnx_asr; print('usage')")
 		default:
-			return probeUvxFrom(ctx, "whisper-ctranslate2", "whisper-ctranslate2", "whisper-ctranslate2", "--help")
+			return probeUvxFrom(ctx, "whisper-ctranslate2", runtimeenv.WhisperCTranslate2, "whisper-ctranslate2", "--help")
 		}
 	}
 
 	probes := []func() DepStatus{
 		func() DepStatus { return probe(ctx, "uvx", "uvx", "--version") },
 		func() DepStatus { return probe(ctx, "ffmpeg", "ffmpeg", "-version") },
-		func() DepStatus { return probeUvx(ctx, "yt-dlp", "yt-dlp", "--version") },
+		func() DepStatus { return probeUvx(ctx, "yt-dlp", runtimeenv.YTDLP, "--version") },
 		whisperProbe,
 	}
 
@@ -94,10 +95,13 @@ func probeCUDA(ctx context.Context) *DepStatus {
 		return nil
 	}
 	gpuName := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	if !cuda.NeedsBundledCublas("cuda") {
+		return &DepStatus{Name: "cuda", OK: true, Version: gpuName, Note: "native CUDA runtime path"}
+	}
 
 	// Check if libcublas.so.12 is loadable via nvidia-cublas-cu12
 	cmd := exec.CommandContext(ctx, "uvx", "--with", cuda.UvxCublasFlag,
-		"--from", "whisper-ctranslate2", "python3", "-c", cuda.CheckScript)
+		"--from", runtimeenv.WhisperCTranslate2, "python3", "-c", cuda.CheckScript)
 	cublasOut, cublasErr := cmd.Output()
 	if cublasErr != nil || !strings.Contains(string(cublasOut), "ok") {
 		return &DepStatus{

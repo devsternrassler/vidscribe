@@ -44,12 +44,12 @@ func testVideoURL() string {
 }
 
 // testCookiesBrowser returns the browser for cookie auth in E2E tests.
-// Override via VIDSCRIBE_TEST_BROWSER (default: chrome).
+// Override via VIDSCRIBE_TEST_BROWSER when authenticated extraction is needed.
 func testCookiesBrowser() string {
 	if b := os.Getenv("VIDSCRIBE_TEST_BROWSER"); b != "" {
 		return b
 	}
-	return "chrome"
+	return ""
 }
 
 func skipIfNoDeps(t *testing.T) {
@@ -153,6 +153,53 @@ func TestE2E_OpenAIWhisper(t *testing.T) {
 
 	verifyOutputFiles(t, paths, outDir, []string{"txt", "md"})
 	verifyTranscriptContent(t, paths)
+}
+
+func TestE2E_Parakeet(t *testing.T) {
+	skipIfNoDeps(t)
+	done := showProgress("parakeet CPU")
+	defer done()
+	cfg := baseConfig(t.TempDir())
+	cfg.Engine = "parakeet"
+	paths, err := Run(context.Background(), cfg, os.Stderr)
+	if err != nil {
+		t.Fatalf("pipeline.Run (parakeet): %v", err)
+	}
+	verifyOutputFiles(t, paths, cfg.OutputDir, []string{"txt", "md"})
+	verifyTranscriptContent(t, paths)
+}
+
+func TestE2E_CaptionsAuto(t *testing.T) {
+	skipIfNoDeps(t)
+	done := showProgress("automatic captions")
+	defer done()
+	cfg := baseConfig(t.TempDir())
+	cfg.Language = "en"
+	cfg.CaptionMode = "auto"
+	paths, err := Run(context.Background(), cfg, os.Stderr)
+	if err != nil {
+		t.Fatalf("pipeline.Run (captions): %v", err)
+	}
+	verifyOutputFiles(t, paths, cfg.OutputDir, []string{"txt", "md"})
+	verifyTranscriptContent(t, paths)
+}
+
+func TestE2E_CaptionFallbackProvenance(t *testing.T) {
+	skipIfNoDeps(t)
+	cfg := baseConfig(t.TempDir())
+	cfg.Language = "yi"
+	cfg.CaptionMode = "manual"
+	cfg.AllowFallback = true
+	result, err := RunDetailed(context.Background(), cfg, os.Stderr)
+	if err != nil {
+		t.Fatalf("pipeline.Run (caption fallback): %v", err)
+	}
+	if !result.Execution.Degraded || len(result.Execution.Fallbacks) == 0 {
+		t.Fatalf("fallback not exposed: %+v", result.Execution)
+	}
+	if result.Execution.Fallbacks[0].From != "captions-manual" || result.Execution.ActualEngine != "faster" {
+		t.Fatalf("unexpected fallback provenance: %+v", result.Execution)
+	}
 }
 
 func TestE2E_AllFormats(t *testing.T) {

@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/sternrassler/vidscribe/internal/runtimeenv"
+	"github.com/sternrassler/vidscribe/internal/subprocess"
 )
 
 const (
@@ -27,7 +30,25 @@ func Download(ctx context.Context, cfg *Config, logw io.Writer) (audioPath strin
 		return "", nil, fmt.Errorf("create temp dir: %w", err)
 	}
 
-	// Single yt-dlp call: download audio + write metadata JSON side-by-side.
+	if cfg.CaptionMode != "off" {
+		captionPath, captionErr := downloadCaptions(ctx, cfg, tmpDir, logw)
+		if captionErr == nil {
+			meta, err = parseInfoJSON(tmpDir)
+			if err != nil {
+				os.RemoveAll(tmpDir)
+				return "", nil, fmt.Errorf("metadata: %w", err)
+			}
+			return captionPath, meta, nil
+		}
+		if !cfg.AllowFallback {
+			os.RemoveAll(tmpDir)
+			return "", nil, fmt.Errorf("captions unavailable and fallback is disabled: %w", captionErr)
+		}
+		cfg.SourceFallbackReason = captionErr.Error()
+		fmt.Fprintf(logw, "[vidscribe] captions unavailable (%v) — degraded fallback to ASR\n", captionErr)
+	}
+
+	// Single yt-dlp call: download native audio + write metadata JSON side-by-side.
 	audioPath, err = downloadAudio(ctx, cfg, tmpDir, logw)
 	if err != nil {
 		os.RemoveAll(tmpDir)
@@ -43,6 +64,32 @@ func Download(ctx context.Context, cfg *Config, logw io.Writer) (audioPath strin
 	return audioPath, meta, nil
 }
 
+func downloadCaptions(ctx context.Context, cfg *Config, destDir string, logw io.Writer) (string, error) {
+	args := buildBaseArgs(cfg)
+	args = append(args, "--no-playlist", "--skip-download", "--write-info-json",
+		"--sub-format", "vtt", "--sub-langs", cfg.Language,
+		"--max-filesize", cfg.MaxFileSize,
+		"--match-filter", fmt.Sprintf("duration <= %d", cfg.MaxDuration),
+		"--output", destDir+"/%(id)s.%(ext)s")
+	if cfg.CaptionMode == "manual" {
+		args = append(args, "--write-subs")
+	} else {
+		args = append(args, "--write-subs", "--write-auto-subs")
+	}
+	args = append(args, cfg.URL)
+	cmd := YtdlpCmd(ctx, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("yt-dlp captions: %s", meaningfulError(stderr.String(), err))
+	}
+	matches, _ := filepath.Glob(filepath.Join(destDir, "*.vtt"))
+	if len(matches) == 0 {
+		return "", fmt.Errorf("no %s captions for language %s", cfg.CaptionMode, cfg.Language)
+	}
+	return matches[0], nil
+}
+
 // downloadAudio downloads the audio track with --write-info-json so metadata
 // can be parsed from the sidecar file, eliminating a separate yt-dlp call.
 // Includes retry logic for HTTP 403/429.
@@ -50,10 +97,10 @@ func downloadAudio(ctx context.Context, cfg *Config, destDir string, logw io.Wri
 	args := buildBaseArgs(cfg)
 	args = append(args,
 		"--no-playlist",
-		"--extract-audio",
-		"--audio-format", "mp3",
-		"--audio-quality", "0",
+		"--format", "bestaudio/best",
 		"--write-info-json",
+		"--max-filesize", cfg.MaxFileSize,
+		"--match-filter", fmt.Sprintf("duration <= %d", cfg.MaxDuration),
 		"--output", destDir+"/%(id)s.%(ext)s",
 		cfg.URL,
 	)
@@ -95,7 +142,7 @@ func downloadAudio(ctx context.Context, cfg *Config, destDir string, logw io.Wri
 		}
 
 		errMsg := stderr.String()
-		errLine := firstLine(errMsg)
+		errLine := meaningfulError(errMsg, err)
 		if errLine == "" {
 			errLine = err.Error()
 		}
@@ -133,7 +180,7 @@ func downloadAudio(ctx context.Context, cfg *Config, destDir string, logw io.Wri
 
 // findAudioFile locates the downloaded audio file in destDir.
 func findAudioFile(destDir string) (string, error) {
-	for _, ext := range []string{"mp3", "m4a", "opus", "webm"} {
+	for _, ext := range []string{"m4a", "opus", "webm", "ogg", "wav", "flac", "mp3", "aac", "mp4", "mkv"} {
 		matches, _ := filepath.Glob(filepath.Join(destDir, "*."+ext))
 		if len(matches) > 0 {
 			return matches[0], nil
@@ -161,8 +208,8 @@ func parseInfoJSON(dir string) (*Metadata, error) {
 
 // YtdlpCmd constructs the yt-dlp exec.Cmd using uvx.
 func YtdlpCmd(ctx context.Context, args ...string) *exec.Cmd {
-	uvxArgs := append([]string{"--with", "secretstorage", "yt-dlp"}, args...)
-	return exec.CommandContext(ctx, "uvx", uvxArgs...)
+	uvxArgs := append([]string{"--with", "secretstorage", runtimeenv.YTDLP}, args...)
+	return subprocess.CommandContext(ctx, "uvx", uvxArgs...)
 }
 
 // buildBaseArgs returns the common yt-dlp flags derived from cfg.
@@ -182,7 +229,7 @@ func buildBaseArgs(cfg *Config) []string {
 		}
 	}
 	if jsRuntime != "" {
-		args = append(args, "--js-runtimes", jsRuntime, "--remote-components", "ejs:github")
+		args = append(args, "--js-runtimes", jsRuntime)
 	}
 
 	return args
@@ -243,4 +290,23 @@ func firstLine(s string) string {
 		return strings.TrimSpace(s[:idx])
 	}
 	return strings.TrimSpace(s)
+}
+
+func meaningfulError(stderr string, fallback error) string {
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "ERROR:") {
+			return line
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
+		}
+	}
+	if fallback != nil {
+		return fallback.Error()
+	}
+	return "unknown error"
 }

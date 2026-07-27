@@ -41,18 +41,18 @@ func testCookiesBrowser() string {
 	if b := os.Getenv("VIDSCRIBE_TEST_BROWSER"); b != "" {
 		return b
 	}
-	return "chrome"
+	return ""
 }
 
 func TestE2E_MCP_TranscribeVideo(t *testing.T) {
 	done := showProgress("MCP transcribe CPU")
 	defer done()
-	outDir := t.TempDir()
 	s := startMCPServer(t)
+	outDir := filepath.Join(s.outputRoot, "cpu")
 	s.handshake(t)
 
 	start := time.Now()
-	text, isError := s.callToolTimeout(t, "transcribe_video", map[string]any{
+	text, isError, progressEvents := s.callToolWithProgress(t, "transcribe_video", map[string]any{
 		"url":             testVideoURL(),
 		"model":           "tiny",
 		"language":        "auto",
@@ -66,6 +66,9 @@ func TestE2E_MCP_TranscribeVideo(t *testing.T) {
 
 	if isError {
 		t.Fatalf("transcribe_video failed:\n%s", text)
+	}
+	if progressEvents < 4 {
+		t.Errorf("received %d progress events, want at least 4", progressEvents)
 	}
 
 	t.Logf("MCP transcribe_video: %s", elapsed.Round(time.Millisecond))
@@ -92,8 +95,8 @@ func TestE2E_MCP_TranscribeVideo_CUDA(t *testing.T) {
 	}
 	done := showProgress("MCP transcribe CUDA")
 	defer done()
-	outDir := t.TempDir()
 	s := startMCPServer(t)
+	outDir := filepath.Join(s.outputRoot, "cuda")
 	s.handshake(t)
 
 	start := time.Now()

@@ -6,73 +6,55 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
-	"github.com/sternrassler/vidscribe/internal/deps"
-	"github.com/sternrassler/vidscribe/internal/pipeline"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/sternrassler/vidscribe/internal/deps"
+	"github.com/sternrassler/vidscribe/internal/pipeline"
 )
 
-const version = "0.1.0"
+var version = "dev"
+var transcribeSlot = make(chan struct{}, 1)
 
-// Serve starts an MCP stdio server and blocks until the client disconnects.
+func SetVersion(value string) {
+	if value != "" {
+		version = value
+	}
+}
+
 func Serve() error {
-	installClaudeCommands()
-
-	s := server.NewMCPServer("vidscribe", version,
-		server.WithToolCapabilities(false),
-	)
-
+	s := server.NewMCPServer("vidscribe", version, server.WithToolCapabilities(false))
 	s.AddTool(transcribeVideoTool(), handleTranscribeVideo)
 	s.AddTool(checkDependenciesTool(), handleCheckDependencies)
 	s.AddTool(listSupportedSitesTool(), handleListSupportedSites)
-
 	return server.ServeStdio(s)
 }
 
-// ── tool: transcribe_video ────────────────────────────────────────────────────
-
 func transcribeVideoTool() mcplib.Tool {
 	return mcplib.NewTool("transcribe_video",
-		mcplib.WithDescription("Download and transcribe audio from a YouTube or other video URL using yt-dlp and faster-whisper."),
-		mcplib.WithString("url",
-			mcplib.Required(),
-			mcplib.Description("Video URL (YouTube, Vimeo, or any yt-dlp-supported platform)"),
-		),
-		mcplib.WithString("model",
-			mcplib.Description("Whisper model: tiny | base | small | medium | large (default: small)"),
-		),
-		mcplib.WithString("language",
-			mcplib.Description("Language code (e.g. 'de', 'en') or 'auto' for auto-detection (default: auto)"),
-		),
-		mcplib.WithString("output_dir",
-			mcplib.Description("Directory to write transcript files (default: ./transcripts)"),
-		),
-		mcplib.WithString("cookies_browser",
-			mcplib.Description("Browser to load cookies from for authentication: chrome | firefox | safari | edge"),
-		),
-		mcplib.WithString("cookies_file",
-			mcplib.Description("Path to Netscape-format cookie file (fallback when secretstorage is unavailable)"),
-		),
-		mcplib.WithString("engine",
-			mcplib.Description("Engine: faster | openai | parakeet (default: faster; parakeet = parakeet-tdt-0.6b-v3 via onnx-asr, CPU-only, ~3x faster than whisper-small with better quality, auto language, ignores model/device/compute_type)"),
-		),
-		mcplib.WithString("format",
-			mcplib.Description("Comma-separated output formats: txt, md, json, srt, vtt (default: txt,md)"),
-		),
-		mcplib.WithString("js_runtime",
-			mcplib.Description("JS runtime for yt-dlp YouTube extraction, e.g. 'node:/usr/bin/node' or 'deno:/usr/bin/deno' (auto-detected if omitted)"),
-		),
-		mcplib.WithString("device",
-			mcplib.Description("Compute device: auto | cpu | cuda (default: auto — selects CUDA if available)"),
-		),
-		mcplib.WithString("compute_type",
-			mcplib.Description("Quantization: int8 | int8_float16 | float16 | float32 (default: float16 for CUDA, int8 for CPU)"),
-		),
+		mcplib.WithDescription("Download captions or best native audio and produce a provenance-rich transcript."),
+		mcplib.WithString("url", mcplib.Required(), mcplib.Description("Public video URL")),
+		mcplib.WithString("profile", mcplib.Description("quality | balanced | gpu-free | fast | custom (default: balanced)")),
+		mcplib.WithString("model", mcplib.Description("Model override: tiny | base | small | medium | large-v3 | turbo")),
+		mcplib.WithString("language", mcplib.Description("Language code or auto (default: auto)")),
+		mcplib.WithString("output_dir", mcplib.Description("Directory below VIDSCRIBE_OUTPUT_ROOT")),
+		mcplib.WithString("cookies_browser", mcplib.Description("chrome | firefox | safari | edge | chromium | brave | opera | vivaldi")),
+		mcplib.WithString("cookies_file", mcplib.Description("Netscape-format cookie file")),
+		mcplib.WithString("engine", mcplib.Description("Engine override: faster | openai | parakeet")),
+		mcplib.WithString("format", mcplib.Description("txt,md,json,srt,vtt; a manifest is always written")),
+		mcplib.WithString("js_runtime", mcplib.Description("node:/path or deno:/path")),
+		mcplib.WithString("device", mcplib.Description("auto | cpu | cuda")),
+		mcplib.WithString("compute_type", mcplib.Description("int8 | int8_float16 | float16 | float32")),
+		mcplib.WithString("captions", mcplib.Description("off | manual | auto; captions require explicit language")),
+		mcplib.WithBoolean("allow_fallback", mcplib.Description("Allow a visible degraded engine fallback (default: false)")),
+		mcplib.WithNumber("max_duration", mcplib.Description("Maximum duration in seconds (default: 14400)")),
+		mcplib.WithString("max_filesize", mcplib.Description("yt-dlp size limit (default: 2G)")),
+		mcplib.WithBoolean("overwrite", mcplib.Description("Explicitly replace existing output files (default: false)")),
+		mcplib.WithBoolean("word_timestamps", mcplib.Description("Include engine word timestamps in JSON output")),
 	)
 }
 
-// allowedBrowsers is the set of browsers accepted for --cookies-from-browser.
 var allowedBrowsers = map[string]bool{
 	"chrome": true, "firefox": true, "safari": true, "edge": true,
 	"chromium": true, "brave": true, "opera": true, "vivaldi": true,
@@ -80,138 +62,155 @@ var allowedBrowsers = map[string]bool{
 
 func handleTranscribeVideo(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	args := req.GetArguments()
-
-	url, _ := args["url"].(string)
-	if url == "" {
+	rawURL, _ := args["url"].(string)
+	if rawURL == "" {
 		return mcplib.NewToolResultError("url is required"), nil
 	}
 
-	// URL scheme check
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		return mcplib.NewToolResultError("only http:// and https:// URLs are supported"), nil
-	}
-
 	cfg := &pipeline.Config{
-		URL:      url,
-		Model:    stringArg(args, "model", "small"),
-		Language: stringArg(args, "language", "auto"),
-		Engine:   stringArg(args, "engine", "faster"),
-		Formats:  strings.Split(stringArg(args, "format", "txt,md"), ","),
-		Device:   stringArg(args, "device", "auto"),
+		URL: rawURL, Profile: stringArg(args, "profile", pipeline.DefaultProfile),
+		Model: stringArg(args, "model", ""), Language: stringArg(args, "language", "auto"),
+		Engine: stringArg(args, "engine", ""), Formats: strings.Split(stringArg(args, "format", "txt,md"), ","),
+		Device: stringArg(args, "device", ""), ComputeType: stringArg(args, "compute_type", ""),
+		CaptionMode: stringArg(args, "captions", "off"), AllowFallback: boolArg(args, "allow_fallback", false),
+		MaxDuration:    int(numberArg(args, "max_duration", pipeline.DefaultMaxDuration)),
+		MaxFileSize:    stringArg(args, "max_filesize", pipeline.DefaultMaxFileSize),
+		Overwrite:      boolArg(args, "overwrite", false),
+		WordTimestamps: boolArg(args, "word_timestamps", false),
+	}
+	if cfg.Engine != "" {
+		cfg.RequestedEngine = cfg.Engine
+	} else {
+		cfg.RequestedEngine = "profile:" + cfg.Profile
 	}
 	cfg.CookiesBrowser, _ = args["cookies_browser"].(string)
 	cfg.CookiesFile, _ = args["cookies_file"].(string)
 	cfg.JSRuntime, _ = args["js_runtime"].(string)
-
-	// Compute type: match CLI auto-selection logic
-	cfg.ComputeType = stringArg(args, "compute_type", "")
-	if cfg.ComputeType == "" {
-		if cfg.Device == "auto" || cfg.Device == "cuda" {
-			cfg.ComputeType = "float16"
-		} else {
-			cfg.ComputeType = "int8"
-		}
-	}
-
-	// output_dir: resolve to absolute path
-	outDir := stringArg(args, "output_dir", "./transcripts")
-	absOut, err := filepath.Abs(outDir)
-	if err != nil {
-		return mcplib.NewToolResultError("invalid output_dir: " + err.Error()), nil
-	}
-	cfg.OutputDir = absOut
-
-	// cookies_browser allowlist
 	if cfg.CookiesBrowser != "" && !allowedBrowsers[strings.ToLower(cfg.CookiesBrowser)] {
 		return mcplib.NewToolResultError("unsupported browser: " + cfg.CookiesBrowser), nil
 	}
-
-	// cookies_file: must be a regular file if specified
 	if cfg.CookiesFile != "" {
-		if fi, err := os.Stat(cfg.CookiesFile); err != nil || !fi.Mode().IsRegular() {
+		if info, err := os.Stat(cfg.CookiesFile); err != nil || !info.Mode().IsRegular() {
 			return mcplib.NewToolResultError("cookies_file not found or not a regular file: " + cfg.CookiesFile), nil
 		}
 	}
+	if err := cfg.Normalize(ctx); err != nil {
+		return mcplib.NewToolResultError("invalid configuration: " + err.Error()), nil
+	}
+	if cfg.CaptionMode != "off" && cfg.Language == "auto" {
+		return mcplib.NewToolResultError("captions require an explicit language"), nil
+	}
+	if err := validatePublicURL(ctx, rawURL); err != nil {
+		return mcplib.NewToolResultError("unsafe or invalid URL: " + err.Error()), nil
+	}
 
-	// Dependency check (same as CLI)
+	root := os.Getenv("VIDSCRIBE_OUTPUT_ROOT")
+	if root == "" {
+		root = "./transcripts"
+	}
+	out, err := containedPath(root, stringArg(args, "output_dir", root))
+	if err != nil {
+		return mcplib.NewToolResultError("invalid output_dir: " + err.Error()), nil
+	}
+	cfg.OutputDir = out
 	if err := deps.Check(cfg.Engine); err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
 
+	select {
+	case transcribeSlot <- struct{}{}:
+		defer func() { <-transcribeSlot }()
+	case <-ctx.Done():
+		return mcplib.NewToolResultError("transcription cancelled while waiting for worker"), nil
+	}
+	runtimeLimit := 2 * time.Hour
+	if raw := os.Getenv("VIDSCRIBE_MAX_RUNTIME"); raw != "" {
+		parsed, parseErr := time.ParseDuration(raw)
+		if parseErr != nil || parsed <= 0 {
+			return mcplib.NewToolResultError("invalid VIDSCRIBE_MAX_RUNTIME"), nil
+		}
+		runtimeLimit = parsed
+	}
+	runCtx, cancel := context.WithTimeout(ctx, runtimeLimit)
+	defer cancel()
+	var token any
+	if req.Params.Meta != nil {
+		token = req.Params.Meta.ProgressToken
+	}
+	cfg.Progress = func(event pipeline.ProgressEvent) {
+		if token == nil {
+			return
+		}
+		if srv := server.ServerFromContext(runCtx); srv != nil {
+			_ = srv.SendNotificationToClient(runCtx, "notifications/progress", map[string]any{
+				"progressToken": token, "progress": event.Step, "total": event.Total,
+				"message": event.Stage + ": " + event.Message,
+			})
+		}
+	}
+
 	var logBuf strings.Builder
-	paths, err := pipeline.Run(ctx, cfg, &logBuf)
+	runResult, err := pipeline.RunDetailed(runCtx, cfg, &logBuf)
 	if err != nil {
-		msg := fmt.Sprintf("Transcription failed: %v\n\nLog:\n%s", err, logBuf.String())
-		return mcplib.NewToolResultError(msg), nil
+		return mcplib.NewToolResultError(fmt.Sprintf("Transcription failed: %v\n\nLog:\n%s", err, logBuf.String())), nil
 	}
-
-	result := fmt.Sprintf("Transcription complete.\n\nFiles written:\n%s",
-		pipeline.FormatReport(paths))
+	resultText := fmt.Sprintf("Transcription complete.\nEngine: %s (requested: %s)\nLanguage: %s\nDegraded: %t\n\nFiles written:\n%s",
+		runResult.Execution.ActualEngine, runResult.Execution.RequestedEngine,
+		runResult.Execution.DetectedLanguage, runResult.Execution.Degraded, pipeline.FormatReport(runResult.Paths))
+	if preview := transcriptPreview(runResult.Paths); preview != "" {
+		resultText += "\nPreview:\n" + preview + "\n"
+	}
 	if log := strings.TrimSpace(logBuf.String()); log != "" {
-		result += "\nLog:\n" + log
+		resultText += "\nLog:\n" + log
 	}
-	return mcplib.NewToolResultText(result), nil
+	toolResult := mcplib.NewToolResultText(resultText)
+	toolResult.StructuredContent = runResult
+	return toolResult, nil
 }
-
-// ── tool: check_dependencies ─────────────────────────────────────────────────
 
 func checkDependenciesTool() mcplib.Tool {
-	return mcplib.NewTool("check_dependencies",
-		mcplib.WithDescription("Check whether all required tools (uvx, ffmpeg, yt-dlp, faster-whisper) are available."),
-		mcplib.WithString("engine",
-			mcplib.Description("Engine to check: faster | openai | parakeet (default: faster)"),
-		),
-	)
+	return mcplib.NewTool("check_dependencies", mcplib.WithDescription("Check the pinned vidscribe runtime toolchain."),
+		mcplib.WithString("engine", mcplib.Description("faster | openai | parakeet (default: faster)")))
 }
 
-func handleCheckDependencies(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	args := req.GetArguments()
-	engine := stringArg(args, "engine", "faster")
-
+func handleCheckDependencies(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	engine := stringArg(req.GetArguments(), "engine", "faster")
+	if engine != "faster" && engine != "openai" && engine != "parakeet" {
+		return mcplib.NewToolResultError("unsupported engine: " + engine), nil
+	}
 	statuses := deps.Report(engine)
-
 	var sb strings.Builder
 	allOK := true
-	for _, s := range statuses {
-		if s.OK {
-			sb.WriteString("✓ ")
+	for _, status := range statuses {
+		if status.OK {
+			sb.WriteString("OK ")
 		} else {
-			sb.WriteString("✗ ")
+			sb.WriteString("ERROR ")
 			allOK = false
 		}
-		sb.WriteString(s.Name)
-		if s.Version != "" {
-			sb.WriteString(": ")
-			sb.WriteString(s.Version)
+		sb.WriteString(status.Name)
+		if status.Version != "" {
+			sb.WriteString(": " + status.Version)
 		}
-		if s.Note != "" {
-			sb.WriteString(" (")
-			sb.WriteString(s.Note)
-			sb.WriteString(")")
+		if status.Note != "" {
+			sb.WriteString(" (" + status.Note + ")")
 		}
 		sb.WriteByte('\n')
 	}
-
-	if !allOK {
-		sb.WriteString("\nSome dependencies are missing. Install uv (https://docs.astral.sh/uv/) and ffmpeg.")
-	} else {
+	if allOK {
 		sb.WriteString("\nAll dependencies OK.")
+	} else {
+		sb.WriteString("\nSome dependencies are missing or incompatible.")
 	}
-
 	return mcplib.NewToolResultText(sb.String()), nil
 }
 
-// ── tool: list_supported_sites ───────────────────────────────────────────────
-
 func listSupportedSitesTool() mcplib.Tool {
-	return mcplib.NewTool("list_supported_sites",
-		mcplib.WithDescription("List all video platforms supported by yt-dlp (1000+)."),
-	)
+	return mcplib.NewTool("list_supported_sites", mcplib.WithDescription("List yt-dlp extractors from the pinned runtime."))
 }
 
-func handleListSupportedSites(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	cmd := pipeline.YtdlpCmd(ctx, "--list-extractors")
-	out, err := cmd.Output()
+func handleListSupportedSites(ctx context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	out, err := pipeline.YtdlpCmd(ctx, "--list-extractors").Output()
 	if err != nil {
 		return mcplib.NewToolResultError("could not list extractors: " + err.Error()), nil
 	}
@@ -219,8 +218,37 @@ func handleListSupportedSites(ctx context.Context, req mcplib.CallToolRequest) (
 }
 
 func stringArg(args map[string]any, key, def string) string {
-	if v, ok := args[key].(string); ok && v != "" {
-		return v
+	if value, ok := args[key].(string); ok && value != "" {
+		return value
 	}
 	return def
+}
+func boolArg(args map[string]any, key string, def bool) bool {
+	if value, ok := args[key].(bool); ok {
+		return value
+	}
+	return def
+}
+func numberArg(args map[string]any, key string, def int) float64 {
+	if value, ok := args[key].(float64); ok {
+		return value
+	}
+	return float64(def)
+}
+func transcriptPreview(paths []string) string {
+	for _, path := range paths {
+		if filepath.Ext(path) != ".txt" {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return ""
+		}
+		words := strings.Fields(string(data))
+		if len(words) > 80 {
+			words = words[:80]
+		}
+		return strings.Join(words, " ")
+	}
+	return ""
 }
