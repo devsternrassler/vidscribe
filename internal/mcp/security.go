@@ -3,49 +3,15 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/sternrassler/vidscribe/internal/netguard"
 )
 
 func validatePublicURL(ctx context.Context, raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-		return fmt.Errorf("only valid http:// and https:// URLs are supported")
-	}
-	if u.User != nil {
-		return fmt.Errorf("URLs containing credentials are not supported")
-	}
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
-		return fmt.Errorf("local and private hosts are not allowed")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if !isPublicIP(ip) {
-			return fmt.Errorf("local and private IP addresses are not allowed")
-		}
-		return nil
-	}
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return fmt.Errorf("resolve URL host: %w", err)
-	}
-	if len(addrs) == 0 {
-		return fmt.Errorf("URL host resolved to no addresses")
-	}
-	for _, addr := range addrs {
-		if !isPublicIP(addr.IP) {
-			return fmt.Errorf("URL host resolves to a local or private address")
-		}
-	}
-	return nil
-}
-
-func isPublicIP(ip net.IP) bool {
-	return ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast() && !ip.IsUnspecified() && !ip.IsMulticast()
+	return netguard.ValidatePublicURL(ctx, raw)
 }
 
 func containedPath(root, requested string) (string, error) {

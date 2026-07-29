@@ -1,7 +1,8 @@
 # vidscribe
 
-Reproducible video transcription with pinned `yt-dlp`, Whisper/Parakeet runtimes,
-quality profiles, provenance manifests, and a CLI plus local MCP server.
+Reproducible media transcription with pinned `yt-dlp`, Whisper/Parakeet runtimes,
+quality profiles, provenance manifests, a CLI, local MCP server, and a durable
+HTTP job service for workflow automation.
 
 ## Runtime requirements
 
@@ -111,6 +112,86 @@ complete process group, while Windows uses the native direct-process cancellatio
 
 MCP startup has no installer side effects and does not write Claude command files.
 
+## HTTP job service
+
+`vidscribe serve` exposes the same tested pipeline as an asynchronous,
+single-worker HTTP service. Jobs and artifacts are persisted atomically, running
+jobs are re-queued after a restart, and identical requests reuse their completed
+result instead of transcribing twice.
+
+```bash
+VIDSCRIBE_API_TOKEN=local-test \
+  vidscribe serve --listen 127.0.0.1:8080 --data-dir ./vidscribe-data
+```
+
+Submit a direct podcast enclosure or audio URL:
+
+```bash
+curl -sS http://127.0.0.1:8080/v1/jobs \
+  -H 'Authorization: Bearer local-test' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "source_type": "podcast",
+    "source_url": "https://example.com/episode.mp3",
+    "canonical_id": "feed-guid-or-stable-id",
+    "title": "Episode title",
+    "language": "en",
+    "profile": "balanced"
+  }'
+```
+
+The response contains a deterministic job ID. Poll and fetch its artifacts:
+
+```text
+GET /v1/jobs/{id}
+GET /v1/jobs/{id}/transcript
+GET /v1/jobs/{id}/manifest
+GET /healthz
+GET /readyz
+GET /metrics
+```
+
+`source_type=video` retains the captions-first/yt-dlp path.
+`source_type=podcast` and `source_type=audio` download the complete direct media
+response, validate each HTTP redirect, enforce the configured byte limit, probe
+the real duration with FFprobe, and then pass the intact file to the common ASR
+pipeline. Arbitrary byte-range truncation is never used.
+
+The service defaults to loopback. Listening on another interface requires
+`VIDSCRIBE_API_TOKEN`; health and Prometheus metrics remain unauthenticated for
+container orchestration. Media URLs must resolve exclusively to public IPs.
+
+### Local container
+
+```bash
+export VIDSCRIBE_API_TOKEN=local-test
+docker compose -f compose.local.yaml up --build -d
+curl -fsS http://127.0.0.1:18082/healthz
+```
+
+The container runs without root privileges, drops all Linux capabilities, uses
+a read-only root filesystem, stores jobs/model caches in `/data`, and confines
+temporary media to a size-limited `/tmp`. The local compose file publishes the
+API on loopback only and budgets 4 vCPU plus 8 GB RAM for long recordings.
+Production deployment is intentionally separate.
+
+### Production container
+
+Tagged releases publish `ghcr.io/sternrassler/vidscribe:vX.Y.Z`. Production
+uses [`compose.prod.yaml`](compose.prod.yaml), pins that immutable release tag,
+and requires an explicit bind address and API token:
+
+```bash
+VIDSCRIBE_IMAGE=ghcr.io/sternrassler/vidscribe:v0.4.0 \
+VIDSCRIBE_BIND_ADDRESS=10.20.0.3 \
+VIDSCRIBE_API_TOKEN='replace-me' \
+  docker compose -f compose.prod.yaml config
+```
+
+The production API should bind only to a private network address. The reference
+container is capped at 4 vCPU and 8 GB RAM, persists jobs and artifacts in a
+named volume, and survives host or container restarts.
+
 ## Audio and captions
 
 The ASR path downloads the best native audio stream without an intermediate MP3
@@ -171,6 +252,7 @@ make vet
 make vuln          # reachable-vulnerability gate
 make test-smoke    # pinned dependency and MCP protocol smoke
 make test-e2e      # real network/engine matrix
+make test-service-e2e # full HTTP path; requires VIDSCRIBE_SERVICE_TEST_AUDIO_URL
 make test-quality  # transcribe the public gold smoke and evaluate it
 ```
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -64,6 +65,14 @@ func TestFirstLine(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("firstLine(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestMeaningfulErrorIgnoresTrailingInstallerSummary(t *testing.T) {
+	stderr := "Exception Message: cuBLAS failed with status CUBLAS_STATUS_ALLOC_FAILED\nInstalled 30 packages in 67ms\n"
+	got := meaningfulError(stderr, nil)
+	if !strings.Contains(got, "cuBLAS failed") {
+		t.Fatalf("meaningfulError = %q", got)
 	}
 }
 

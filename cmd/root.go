@@ -3,15 +3,19 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/sternrassler/vidscribe/internal/deps"
 	"github.com/sternrassler/vidscribe/internal/mcp"
 	"github.com/sternrassler/vidscribe/internal/pipeline"
 	"github.com/sternrassler/vidscribe/internal/quality"
+	"github.com/sternrassler/vidscribe/internal/service"
 )
 
 var (
@@ -83,6 +87,48 @@ func init() {
 	rootCmd.Flags().BoolVar(&mcpMode, "mcp", false, "Start as MCP server (stdio)")
 	rootCmd.Flags().BoolVar(&verbose, "verbose", false, "Verbose output")
 	rootCmd.AddCommand(newQualityEvalCommand())
+	rootCmd.AddCommand(newServeCommand())
+}
+
+func newServeCommand() *cobra.Command {
+	var listen, dataDir, maxRuntime string
+	command := &cobra.Command{
+		Use:   "serve",
+		Short: "Run the durable HTTP transcription job service",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			runtimeLimit, err := time.ParseDuration(maxRuntime)
+			if err != nil || runtimeLimit <= 0 {
+				return fmt.Errorf("invalid max runtime %q", maxRuntime)
+			}
+			token := os.Getenv("VIDSCRIBE_API_TOKEN")
+			if token == "" && !strings.HasPrefix(listen, "127.0.0.1:") && !strings.HasPrefix(listen, "localhost:") {
+				return fmt.Errorf("VIDSCRIBE_API_TOKEN is required when listening beyond loopback")
+			}
+			srv, err := service.New(service.Config{DataDir: dataDir, APIToken: token, MaxRuntime: runtimeLimit})
+			if err != nil {
+				return err
+			}
+			srv.Start(cmd.Context())
+			httpServer := &http.Server{Addr: listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
+			go func() {
+				<-cmd.Context().Done()
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				_ = httpServer.Shutdown(shutdownCtx)
+			}()
+			fmt.Fprintf(cmd.ErrOrStderr(), "vidscribe service listening on %s\n", listen)
+			err = httpServer.ListenAndServe()
+			if errors.Is(err, http.ErrServerClosed) {
+				return nil
+			}
+			return err
+		},
+	}
+	command.Flags().StringVar(&listen, "listen", "127.0.0.1:8080", "HTTP listen address")
+	command.Flags().StringVar(&dataDir, "data-dir", "./vidscribe-data", "Persistent job and artifact directory")
+	command.Flags().StringVar(&maxRuntime, "max-runtime", "6h", "Maximum runtime per job")
+	return command
 }
 
 func newQualityEvalCommand() *cobra.Command {

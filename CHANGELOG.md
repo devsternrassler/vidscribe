@@ -4,6 +4,23 @@ Alle wesentlichen Änderungen an vidscribe werden in dieser Datei dokumentiert.
 
 ## [Unreleased]
 
+### Added
+
+- Dauerhafter HTTP-Jobdienst (`vidscribe serve`) mit Bearer-Authentifizierung,
+  atomarer Dateipersistenz, Restart-Recovery, idempotentem Ergebnis-Cache,
+  Fortschritt, Health-/Readiness-Endpunkten und Prometheus-Metriken.
+- Direkter Podcast-/Audio-Adapter, der vollständige Medien lädt, Redirect-Ziele
+  gegen SSRF prüft, Größenlimits erzwingt und die Dauer mit FFprobe validiert.
+- Gehärtetes, nicht privilegiertes Container-Image und lokaler Compose-Stack.
+- Versioniertes GHCR-Image und Produktions-Compose für einen privaten
+  Vidscribe-Worker mit 4 vCPU und 8 GB RAM.
+- Separater Langform-Service-E2E für reale Podcast-Regressionsdateien.
+
+### Changed
+
+- Die öffentliche URL-Prüfung ist nun ein gemeinsamer Baustein für MCP, HTTP-API
+  und direkte Medien-Downloads; Redirects werden bei jedem Hop neu validiert.
+
 ## [0.3.0] - 2026-07-27
 
 ### Added

@@ -1,0 +1,28 @@
+services:
+  vidscribe-service:
+    image: ${VIDSCRIBE_IMAGE:?set VIDSCRIBE_IMAGE to an immutable release tag}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      VIDSCRIBE_API_TOKEN: ${VIDSCRIBE_API_TOKEN:?set VIDSCRIBE_API_TOKEN}
+      XDG_CACHE_HOME: /data/cache
+      UV_CACHE_DIR: /data/cache/uv
+    ports:
+      - "${VIDSCRIBE_BIND_ADDRESS:?set VIDSCRIBE_BIND_ADDRESS}:${VIDSCRIBE_BIND_PORT:-8080}:8080"
+    volumes:
+      - vidscribe_data:/data
+    tmpfs:
+      - /tmp:size=3G,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G
+
+volumes:
+  vidscribe_data:
