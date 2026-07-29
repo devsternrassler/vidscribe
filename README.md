@@ -175,6 +175,23 @@ temporary media to a size-limited `/tmp`. The local compose file publishes the
 API on loopback only and budgets 4 vCPU plus 8 GB RAM for long recordings.
 Production deployment is intentionally separate.
 
+### Production container
+
+Tagged releases publish `ghcr.io/sternrassler/vidscribe:vX.Y.Z`. Production
+uses [`compose.prod.yaml`](compose.prod.yaml), pins that immutable release tag,
+and requires an explicit bind address and API token:
+
+```bash
+VIDSCRIBE_IMAGE=ghcr.io/sternrassler/vidscribe:v0.4.0 \
+VIDSCRIBE_BIND_ADDRESS=10.20.0.3 \
+VIDSCRIBE_API_TOKEN='replace-me' \
+  docker compose -f compose.prod.yaml config
+```
+
+The production API should bind only to a private network address. The reference
+container is capped at 4 vCPU and 8 GB RAM, persists jobs and artifacts in a
+named volume, and survives host or container restarts.
+
 ## Audio and captions
 
 The ASR path downloads the best native audio stream without an intermediate MP3
