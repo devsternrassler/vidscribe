@@ -41,6 +41,11 @@ type ProgressEvent struct {
 // Config holds all parameters for a single transcription run.
 type Config struct {
 	URL                  string
+	SourceType           string
+	SourceID             string
+	Title                string
+	Creator              string
+	PublishedAt          string
 	RequestedEngine      string
 	Profile              string
 	Model                string
@@ -79,6 +84,13 @@ type Metadata struct {
 // Normalize validates the public configuration contract, applies a profile and
 // resolves auto hardware selection before any external process is started.
 func (c *Config) Normalize(ctx context.Context) error {
+	c.SourceType = strings.ToLower(strings.TrimSpace(c.SourceType))
+	if c.SourceType == "" {
+		c.SourceType = "video"
+	}
+	if c.SourceType != "video" && c.SourceType != "podcast" && c.SourceType != "audio" {
+		return fmt.Errorf("unsupported source type %q (want video|podcast|audio)", c.SourceType)
+	}
 	c.Profile = strings.ToLower(strings.TrimSpace(c.Profile))
 	if c.Profile == "" {
 		c.Profile = "custom"

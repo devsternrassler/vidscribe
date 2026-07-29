@@ -6,12 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/sternrassler/vidscribe/internal/netguard"
 	"github.com/sternrassler/vidscribe/internal/runtimeenv"
 	"github.com/sternrassler/vidscribe/internal/subprocess"
 )
@@ -25,6 +30,9 @@ const (
 // path to the downloaded audio file together with video metadata.
 // The caller is responsible for deleting the file when done.
 func Download(ctx context.Context, cfg *Config, logw io.Writer) (audioPath string, meta *Metadata, err error) {
+	if cfg.SourceType == "podcast" || cfg.SourceType == "audio" {
+		return downloadDirectAudio(ctx, cfg, logw)
+	}
 	tmpDir, err := os.MkdirTemp("", "vidscribe-dl-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("create temp dir: %w", err)
@@ -62,6 +70,154 @@ func Download(ctx context.Context, cfg *Config, logw io.Writer) (audioPath strin
 	}
 
 	return audioPath, meta, nil
+}
+
+var directHTTPClient = func() *http.Client { return netguard.PublicHTTPClient(2 * time.Hour) }
+
+func downloadDirectAudio(ctx context.Context, cfg *Config, logw io.Writer) (string, *Metadata, error) {
+	if err := netguard.ValidatePublicURL(ctx, cfg.URL); err != nil {
+		return "", nil, fmt.Errorf("unsafe or invalid URL: %w", err)
+	}
+	maxBytes, err := parseByteSize(cfg.MaxFileSize)
+	if err != nil {
+		return "", nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.URL, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("User-Agent", "vidscribe/1 media-worker")
+	resp, err := directHTTPClient().Do(req)
+	if err != nil {
+		return "", nil, fmt.Errorf("download media: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", nil, fmt.Errorf("download media: unexpected HTTP status %s", resp.Status)
+	}
+	if resp.ContentLength > maxBytes {
+		return "", nil, fmt.Errorf("media size %d exceeds configured maximum %d bytes", resp.ContentLength, maxBytes)
+	}
+
+	tmpDir, err := os.MkdirTemp("", "vidscribe-direct-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temp dir: %w", err)
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.RemoveAll(tmpDir)
+		}
+	}()
+	ext := mediaExtension(resp.Header.Get("Content-Type"), resp.Request.URL)
+	path := filepath.Join(tmpDir, "media"+ext)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", nil, fmt.Errorf("create media file: %w", err)
+	}
+	written, copyErr := io.Copy(f, io.LimitReader(resp.Body, maxBytes+1))
+	closeErr := f.Close()
+	if copyErr != nil {
+		return "", nil, fmt.Errorf("write media: %w", copyErr)
+	}
+	if closeErr != nil {
+		return "", nil, fmt.Errorf("close media: %w", closeErr)
+	}
+	if written > maxBytes {
+		return "", nil, fmt.Errorf("media exceeds configured maximum %d bytes", maxBytes)
+	}
+	if written == 0 {
+		return "", nil, fmt.Errorf("downloaded media is empty")
+	}
+	if cfg.Verbose {
+		fmt.Fprintf(logw, "[vidscribe] downloaded %d bytes from direct media URL\n", written)
+	}
+	duration, err := probeDuration(ctx, path)
+	if err != nil {
+		return "", nil, fmt.Errorf("probe direct media: %w", err)
+	}
+	id := strings.TrimSpace(cfg.SourceID)
+	if id == "" {
+		id = strings.TrimSuffix(filepath.Base(resp.Request.URL.Path), filepath.Ext(resp.Request.URL.Path))
+	}
+	if id == "" || id == "." {
+		id = "media"
+	}
+	title := strings.TrimSpace(cfg.Title)
+	if title == "" {
+		title = id
+	}
+	ok = true
+	return path, &Metadata{
+		ID: id, Title: title, Uploader: cfg.Creator, Channel: cfg.Creator,
+		Duration: duration, UploadDate: cfg.PublishedAt, WebpageURL: cfg.URL,
+	}, nil
+}
+
+func mediaExtension(contentType string, sourceURL *url.URL) string {
+	if parsed, _, err := mime.ParseMediaType(contentType); err == nil {
+		switch parsed {
+		case "audio/mpeg", "audio/mp3":
+			return ".mp3"
+		case "audio/mp4", "audio/x-m4a":
+			return ".m4a"
+		case "audio/ogg":
+			return ".ogg"
+		case "audio/wav", "audio/x-wav":
+			return ".wav"
+		case "audio/webm", "video/webm":
+			return ".webm"
+		case "video/mp4":
+			return ".mp4"
+		}
+	}
+	if sourceURL != nil {
+		ext := strings.ToLower(filepath.Ext(sourceURL.Path))
+		if len(ext) >= 2 && len(ext) <= 6 {
+			return ext
+		}
+	}
+	return ".media"
+}
+
+func probeDuration(ctx context.Context, path string) (float64, error) {
+	cmd := subprocess.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+	duration, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("invalid duration %q", strings.TrimSpace(string(out)))
+	}
+	return duration, nil
+}
+
+func parseByteSize(value string) (int64, error) {
+	v := strings.ToUpper(strings.TrimSpace(value))
+	if v == "" {
+		return 0, fmt.Errorf("maximum file size is empty")
+	}
+	multiplier := int64(1)
+	last := v[len(v)-1]
+	if strings.ContainsRune("KMGT", rune(last)) {
+		v = v[:len(v)-1]
+		switch last {
+		case 'K':
+			multiplier = 1 << 10
+		case 'M':
+			multiplier = 1 << 20
+		case 'G':
+			multiplier = 1 << 30
+		case 'T':
+			multiplier = 1 << 40
+		}
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("invalid maximum file size %q", value)
+	}
+	return int64(n * float64(multiplier)), nil
 }
 
 func downloadCaptions(ctx context.Context, cfg *Config, destDir string, logw io.Writer) (string, error) {
@@ -297,6 +453,17 @@ func meaningfulError(stderr string, fallback error) string {
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if strings.HasPrefix(line, "ERROR:") {
+			return line
+		}
+	}
+	// uv/uvx can append installation summaries after the actual process error.
+	// Prefer a bounded diagnostic line instead of reporting "Installed N packages".
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "exception message:") || strings.Contains(lower, "runtimeerror:") ||
+			strings.Contains(lower, "cublas") || strings.Contains(lower, "cuda") ||
+			strings.Contains(lower, "failed") || strings.Contains(lower, " error:") {
 			return line
 		}
 	}

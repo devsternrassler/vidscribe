@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+.serena
+dist
+transcripts
+vidscribe-data
+quality-results
+*.mp3
+*.m4a
+*.opus
+*.webm
+vidscribe

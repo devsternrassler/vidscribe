@@ -1,4 +1,4 @@
-.PHONY: build test test-v test-smoke test-e2e test-bench test-all test-quality vet vuln lint clean release-dry run
+.PHONY: build test test-v test-smoke test-e2e test-service-e2e test-bench test-all test-quality vet vuln lint clean release-dry run service-local
 
 BIN := vidscribe
 
@@ -21,6 +21,11 @@ test-smoke:
 # Override browser: VIDSCRIBE_TEST_BROWSER=firefox make test-e2e
 test-e2e:
 	go test -tags="smoke e2e" ./... -count=1 -v -timeout 600s
+
+# Full HTTP-service path with a real direct audio URL. This is intentionally
+# separate from scheduled E2E because long podcast fixtures can take hours.
+test-service-e2e:
+	go test -tags="service_e2e" ./internal/service -run TestServiceE2E_DirectAudio -count=1 -v -timeout 6h
 
 # Performance comparison table + Go benchmarks (requires uvx + ffmpeg + network)
 test-bench:
@@ -53,3 +58,6 @@ release-dry:
 
 run:
 	go run . $(ARGS)
+
+service-local:
+	go run . serve --listen 127.0.0.1:8080 --data-dir ./vidscribe-data
