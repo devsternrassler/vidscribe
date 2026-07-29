@@ -14,7 +14,7 @@ services:
       XDG_CACHE_HOME: /data/cache
       UV_CACHE_DIR: /data/cache/uv
     ports:
-      - "127.0.0.1:18080:8080"
+      - "127.0.0.1:18082:8080"
     volumes:
       - vidscribe_data:/data
     tmpfs:
@@ -22,8 +22,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "6.0"
-          memory: 6G
+          cpus: "4.0"
+          memory: 8G
 
 volumes:
   vidscribe_data:

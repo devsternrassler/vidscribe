@@ -166,14 +166,14 @@ container orchestration. Media URLs must resolve exclusively to public IPs.
 ```bash
 export VIDSCRIBE_API_TOKEN=local-test
 docker compose -f compose.local.yaml up --build -d
-curl -fsS http://127.0.0.1:18080/healthz
+curl -fsS http://127.0.0.1:18082/healthz
 ```
 
 The container runs without root privileges, drops all Linux capabilities, uses
 a read-only root filesystem, stores jobs/model caches in `/data`, and confines
 temporary media to a size-limited `/tmp`. The local compose file publishes the
-API on loopback only and budgets 6 vCPU plus 6 GB RAM for useful throughput on
-long recordings. Production deployment is intentionally separate.
+API on loopback only and budgets 4 vCPU plus 8 GB RAM for long recordings.
+Production deployment is intentionally separate.
 
 ## Audio and captions
 
