@@ -73,6 +73,7 @@ func Download(ctx context.Context, cfg *Config, logw io.Writer) (audioPath strin
 }
 
 var directHTTPClient = func() *http.Client { return netguard.PublicHTTPClient(2 * time.Hour) }
+var directProbeDuration = probeDuration
 
 func downloadDirectAudio(ctx context.Context, cfg *Config, logw io.Writer) (string, *Metadata, error) {
 	if err := netguard.ValidatePublicURL(ctx, cfg.URL); err != nil {
@@ -132,7 +133,7 @@ func downloadDirectAudio(ctx context.Context, cfg *Config, logw io.Writer) (stri
 	if cfg.Verbose {
 		fmt.Fprintf(logw, "[vidscribe] downloaded %d bytes from direct media URL\n", written)
 	}
-	duration, err := probeDuration(ctx, path)
+	duration, err := directProbeDuration(ctx, path)
 	if err != nil {
 		return "", nil, fmt.Errorf("probe direct media: %w", err)
 	}

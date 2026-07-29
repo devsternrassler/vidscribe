@@ -18,7 +18,12 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { re
 
 func TestDownloadDirectAudioFetchesWholeMedia(t *testing.T) {
 	original := directHTTPClient
-	defer func() { directHTTPClient = original }()
+	originalProbe := directProbeDuration
+	defer func() {
+		directHTTPClient = original
+		directProbeDuration = originalProbe
+	}()
+	directProbeDuration = func(context.Context, string) (float64, error) { return 1, nil }
 	wav := oneSecondSilentWAV()
 	directHTTPClient = func() *http.Client {
 		return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
