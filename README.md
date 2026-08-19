@@ -213,9 +213,15 @@ set; that transition is marked degraded in the manifest.
 | Windows arm64 | partial | Go launcher works; ASR wheel availability is limited |
 
 `device=auto` executes a real `nvidia-smi` probe. It chooses CUDA only on a
-supported platform with a usable GPU; otherwise it chooses CPU and a compatible
-compute type. Cross-compilation proves the launcher builds, not that every Python
-runtime wheel exists.
+supported platform whose selected GPU has at least 1 GiB of free VRAM;
+otherwise it chooses CPU and a compatible compute type. An explicit
+`device=cuda` remains fail-loud and bypasses this automatic readiness check.
+Cross-compilation proves the launcher builds, not that every Python runtime
+wheel exists.
+
+For MCP calls, a relative `output_dir` is resolved below
+`VIDSCRIBE_OUTPUT_ROOT`; an absolute path is accepted only when it is already
+contained below that root. Traversal and symlink escapes are rejected.
 
 ## Quality evaluation
 

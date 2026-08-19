@@ -108,7 +108,7 @@ func handleTranscribeVideo(ctx context.Context, req mcplib.CallToolRequest) (*mc
 	if root == "" {
 		root = "./transcripts"
 	}
-	out, err := containedPath(root, stringArg(args, "output_dir", root))
+	out, err := containedPath(root, stringArg(args, "output_dir", "."))
 	if err != nil {
 		return mcplib.NewToolResultError("invalid output_dir: " + err.Error()), nil
 	}

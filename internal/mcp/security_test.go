@@ -36,3 +36,35 @@ func TestContainedPath(t *testing.T) {
 		t.Fatal("escape path accepted")
 	}
 }
+
+func TestContainedPathResolvesRelativePathBelowRoot(t *testing.T) {
+	root := t.TempDir()
+	inside, err := containedPath(root, filepath.Join("diagnostics", "smoke"))
+	if err != nil {
+		t.Fatalf("relative path rejected: %v", err)
+	}
+	want := filepath.Join(root, "diagnostics", "smoke")
+	if inside != want {
+		t.Fatalf("relative path resolved to %q, want %q", inside, want)
+	}
+}
+
+func TestContainedPathDefaultDotUsesRelativeRootOnce(t *testing.T) {
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+	inside, err := containedPath("./transcripts", ".")
+	if err != nil {
+		t.Fatalf("default output path rejected: %v", err)
+	}
+	want := filepath.Join(workDir, "transcripts")
+	if inside != want {
+		t.Fatalf("default output path resolved to %q, want %q", inside, want)
+	}
+}
+
+func TestContainedPathRejectsRelativeTraversal(t *testing.T) {
+	root := t.TempDir()
+	if _, err := containedPath(root, filepath.Join("..", "escape")); err == nil {
+		t.Fatal("relative traversal accepted")
+	}
+}

@@ -48,7 +48,8 @@ func TestE2E_MCP_TranscribeVideo(t *testing.T) {
 	done := showProgress("MCP transcribe CPU")
 	defer done()
 	s := startMCPServer(t)
-	outDir := filepath.Join(s.outputRoot, "cpu")
+	outputDirArg := "cpu-relative"
+	outDir := filepath.Join(s.outputRoot, outputDirArg)
 	s.handshake(t)
 
 	start := time.Now()
@@ -56,7 +57,7 @@ func TestE2E_MCP_TranscribeVideo(t *testing.T) {
 		"url":             testVideoURL(),
 		"model":           "tiny",
 		"language":        "auto",
-		"output_dir":      outDir,
+		"output_dir":      outputDirArg,
 		"engine":          "faster",
 		"device":          "cpu",
 		"cookies_browser": testCookiesBrowser(),

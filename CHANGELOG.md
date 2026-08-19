@@ -4,6 +4,20 @@ Alle wesentlichen Änderungen an vidscribe werden in dieser Datei dokumentiert.
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP-Ausgabeunterverzeichnisse werden relativ zu `VIDSCRIBE_OUTPUT_ROOT`
+  statt zum Prozess-Arbeitsverzeichnis aufgeloest; Traversal- und
+  Symlink-Ausbrueche bleiben blockiert. Auch der vollstaendig unkonfigurierte
+  Default schreibt genau nach `./transcripts` statt in ein doppeltes
+  Unterverzeichnis.
+- `device=auto` waehlt eine praktisch belegte NVIDIA-GPU mit weniger als 1 GiB
+  freiem VRAM nicht mehr aus und vermeidet damit den reproduzierten CUDA-OOM;
+  explizites `device=cuda` bleibt unveraendert fail-loud.
+- Go-Build und Container auf 1.26.6 angehoben, um die vom blockierenden
+  `govulncheck` als erreichbar gemeldeten Standardbibliotheksluecken zu
+  schliessen.
+
 ## [0.4.0] - 2026-07-29
 
 ### Added

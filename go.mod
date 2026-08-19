@@ -1,6 +1,6 @@
 module github.com/sternrassler/vidscribe
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/mark3labs/mcp-go v0.46.0

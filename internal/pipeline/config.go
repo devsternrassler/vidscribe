@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -16,6 +17,7 @@ const (
 	DefaultProfile     = "balanced"
 	DefaultMaxDuration = 4 * 60 * 60
 	DefaultMaxFileSize = "2G"
+	minCUDAFreeMiB     = 1024
 )
 
 var (
@@ -247,7 +249,14 @@ func cudaAvailable(ctx context.Context) bool {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	return exec.CommandContext(probeCtx, path, "--query-gpu=name", "--format=csv,noheader").Run() == nil
+	out, err := exec.CommandContext(probeCtx, path, "--query-gpu=memory.free", "--format=csv,noheader,nounits").Output()
+	return err == nil && hasSufficientCUDAFreeMemory(string(out))
+}
+
+func hasSufficientCUDAFreeMemory(output string) bool {
+	line, _, _ := strings.Cut(strings.TrimSpace(output), "\n")
+	freeMiB, err := strconv.Atoi(strings.TrimSpace(line))
+	return err == nil && freeMiB >= minCUDAFreeMiB
 }
 
 var cudaProbe = cudaAvailable

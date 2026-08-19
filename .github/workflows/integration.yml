@@ -33,5 +33,10 @@ jobs:
           go test -tags=e2e ./internal/pipeline -v -count=1 -timeout 900s
           -run 'TestE2E_(FasterWhisper_CPU|Parakeet|CaptionsAuto)$'
 
+      - name: Run real MCP relative-output E2E
+        run: >-
+          go test -tags=e2e ./internal/mcp -v -count=1 -timeout 180s
+          -run '^TestE2E_MCP_TranscribeVideo$'
+
       - name: Run transcript quality gate
         run: make test-quality

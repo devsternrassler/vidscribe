@@ -26,7 +26,7 @@ func containedPath(root, requested string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	canonicalRequested, err := canonicalizeFuturePath(requested)
+	canonicalRequested, err := canonicalizeFuturePath(requested, canonicalRoot)
 	if err != nil {
 		return "", err
 	}
@@ -40,11 +40,12 @@ func containedPath(root, requested string) (string, error) {
 	return canonicalRequested, nil
 }
 
-func canonicalizeFuturePath(path string) (string, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
+func canonicalizeFuturePath(path, base string) (string, error) {
+	abs := path
+	if !filepath.IsAbs(path) {
+		abs = filepath.Join(base, path)
 	}
+	abs = filepath.Clean(abs)
 	existing := abs
 	var suffix []string
 	for {

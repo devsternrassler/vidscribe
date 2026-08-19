@@ -99,6 +99,40 @@ func TestConfigNormalizeBalancedWithoutCUDAUsesParakeet(t *testing.T) {
 	}
 }
 
+func TestConfigNormalizeWithUsableCUDASelectsCUDA(t *testing.T) {
+	original := cudaProbe
+	cudaProbe = func(context.Context) bool { return true }
+	t.Cleanup(func() { cudaProbe = original })
+	cfg := &Config{Profile: "balanced", Formats: []string{"txt"}}
+	if err := cfg.Normalize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Engine != "faster" || cfg.Device != "cuda" || cfg.ComputeType != "float16" {
+		t.Fatalf("unexpected CUDA balance: %+v", cfg)
+	}
+}
+
+func TestHasSufficientCUDAFreeMemory(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{name: "reported failure state", output: "107\n", want: false},
+		{name: "below boundary", output: "1023\n", want: false},
+		{name: "boundary", output: "1024\n", want: true},
+		{name: "multiple GPUs use selected first device", output: "512\n8192\n", want: false},
+		{name: "invalid output", output: "not-a-number\n", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasSufficientCUDAFreeMemory(tt.output); got != tt.want {
+				t.Fatalf("hasSufficientCUDAFreeMemory(%q) = %t, want %t", tt.output, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSafeTitleIncludesIDAndPreservesUTF8(t *testing.T) {
 	got := (&Metadata{Title: strings.Repeat("ä", 80), ID: "xyz"}).SafeTitle()
 	if !strings.HasSuffix(got, " [xyz]") || !utf8.ValidString(got) {
