@@ -4,6 +4,12 @@ Alle wesentlichen Änderungen an vidscribe werden in dieser Datei dokumentiert.
 
 ## [Unreleased]
 
+### Fixed
+
+- Der gepinnte yt-dlp-Runtime-Vertrag installiert nun auch das offizielle
+  `curl-cffi`-Extra, damit Remote-Worker Seiten mit verpflichtender
+  Browser-Impersonation (unter anderem Dailymotion) laden koennen.
+
 ## [0.5.0] - 2026-08-29
 
 ### Added
