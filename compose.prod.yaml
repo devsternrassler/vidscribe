@@ -10,6 +10,7 @@ services:
       - ALL
     environment:
       VIDSCRIBE_API_TOKEN: ${VIDSCRIBE_API_TOKEN:?set VIDSCRIBE_API_TOKEN}
+      VIDSCRIBE_MCP_API_TOKEN: ${VIDSCRIBE_MCP_API_TOKEN:-}
       XDG_CACHE_HOME: /data/cache
       UV_CACHE_DIR: /data/cache/uv
     ports:

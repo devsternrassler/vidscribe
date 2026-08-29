@@ -4,6 +4,22 @@ Alle wesentlichen Änderungen an vidscribe werden in dieser Datei dokumentiert.
 
 ## [Unreleased]
 
+### Added
+
+- Remote-first MCP-Ausfuehrung ueber einen privaten Loopback-SSH-Tunnel mit
+  separater Token-Datei, sichtbarem lokalem Fallback und Backend-Provenienz.
+- Formatparitaet fuer Remote-Auftraege und ein generischer, typisierter
+  Artefakt-Endpunkt fuer `txt`, `md`, `json`, `srt`, `vtt` und Manifest.
+- Separates `VIDSCRIBE_MCP_API_TOKEN`, das parallel zum bestehenden n8n-Token
+  akzeptiert und unabhaengig rotiert werden kann.
+
+### Security
+
+- Remote-MCP akzeptiert nur HTTP-Loopback-Ziele und streng geschuetzte,
+  nicht verlinkte Token-Dateien; Cookies verlassen den lokalen Rechner nie.
+- Authentifizierungs-, Validierungs-, Sicherheits-, Protokoll-, Abbruch- und
+  lokale Ausgabefehler werden ohne stillen lokalen Fallback gemeldet.
+
 ### Fixed
 
 - MCP-Ausgabeunterverzeichnisse werden relativ zu `VIDSCRIBE_OUTPUT_ROOT`

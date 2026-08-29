@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,23 +30,24 @@ const (
 )
 
 type JobRequest struct {
-	SourceType     string `json:"source_type"`
-	SourceURL      string `json:"source_url"`
-	CanonicalID    string `json:"canonical_id,omitempty"`
-	Title          string `json:"title,omitempty"`
-	Creator        string `json:"creator,omitempty"`
-	PublishedAt    string `json:"published_at,omitempty"`
-	Profile        string `json:"profile,omitempty"`
-	Engine         string `json:"engine,omitempty"`
-	Model          string `json:"model,omitempty"`
-	Language       string `json:"language,omitempty"`
-	Device         string `json:"device,omitempty"`
-	ComputeType    string `json:"compute_type,omitempty"`
-	Captions       string `json:"captions,omitempty"`
-	AllowFallback  bool   `json:"allow_fallback,omitempty"`
-	MaxDuration    int    `json:"max_duration,omitempty"`
-	MaxFileSize    string `json:"max_filesize,omitempty"`
-	WordTimestamps bool   `json:"word_timestamps,omitempty"`
+	SourceType     string   `json:"source_type"`
+	SourceURL      string   `json:"source_url"`
+	CanonicalID    string   `json:"canonical_id,omitempty"`
+	Title          string   `json:"title,omitempty"`
+	Creator        string   `json:"creator,omitempty"`
+	PublishedAt    string   `json:"published_at,omitempty"`
+	Profile        string   `json:"profile,omitempty"`
+	Engine         string   `json:"engine,omitempty"`
+	Model          string   `json:"model,omitempty"`
+	Language       string   `json:"language,omitempty"`
+	Device         string   `json:"device,omitempty"`
+	ComputeType    string   `json:"compute_type,omitempty"`
+	Captions       string   `json:"captions,omitempty"`
+	AllowFallback  bool     `json:"allow_fallback,omitempty"`
+	MaxDuration    int      `json:"max_duration,omitempty"`
+	MaxFileSize    string   `json:"max_filesize,omitempty"`
+	WordTimestamps bool     `json:"word_timestamps,omitempty"`
+	Formats        []string `json:"formats,omitempty"`
 }
 
 type Job struct {
@@ -65,6 +67,7 @@ type Runner func(context.Context, *pipeline.Config, io.Writer) (*pipeline.RunRes
 type Config struct {
 	DataDir         string
 	APIToken        string
+	APITokens       []string
 	MaxRuntime      time.Duration
 	Runner          Runner
 	DependencyCheck func(string) error
@@ -132,17 +135,43 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/jobs/{id}", s.authorize(http.HandlerFunc(s.getJob)))
 	mux.Handle("GET /v1/jobs/{id}/transcript", s.authorize(http.HandlerFunc(s.getTranscript)))
 	mux.Handle("GET /v1/jobs/{id}/manifest", s.authorize(http.HandlerFunc(s.getManifest)))
+	mux.Handle("GET /v1/jobs/{id}/artifacts/{format}", s.authorize(http.HandlerFunc(s.getArtifact)))
 	return mux
 }
 
 func (s *Server) authorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.APIToken != "" && r.Header.Get("Authorization") != "Bearer "+s.cfg.APIToken {
+		if !s.authorized(r.Header.Get("Authorization")) {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) authorized(header string) bool {
+	tokens := make([]string, 0, len(s.cfg.APITokens)+1)
+	for _, token := range s.cfg.APITokens {
+		if token != "" {
+			tokens = append(tokens, token)
+		}
+	}
+	if s.cfg.APIToken != "" {
+		tokens = append(tokens, s.cfg.APIToken)
+	}
+	if len(tokens) == 0 {
+		return true
+	}
+	if !strings.HasPrefix(header, "Bearer ") {
+		return false
+	}
+	presented := []byte(strings.TrimPrefix(header, "Bearer "))
+	for _, token := range tokens {
+		if subtle.ConstantTimeCompare(presented, []byte(token)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -258,6 +287,25 @@ func (s *Server) getTranscript(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getManifest(w http.ResponseWriter, r *http.Request) {
 	s.serveArtifact(w, r, ".manifest.json", "application/json")
+}
+
+func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
+	format := strings.ToLower(r.PathValue("format"))
+	suffixes := map[string]string{
+		"txt": ".txt", "md": ".md", "json": ".json", "srt": ".srt",
+		"vtt": ".vtt", "manifest": ".manifest.json",
+	}
+	contentTypes := map[string]string{
+		"txt": "text/plain; charset=utf-8", "md": "text/markdown; charset=utf-8",
+		"json": "application/json", "srt": "application/x-subrip; charset=utf-8",
+		"vtt": "text/vtt; charset=utf-8", "manifest": "application/json",
+	}
+	suffix, ok := suffixes[format]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unsupported artifact format")
+		return
+	}
+	s.serveArtifact(w, r, suffix, contentTypes[format])
 }
 
 func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, suffix, contentType string) {
@@ -377,6 +425,10 @@ func requestConfig(req JobRequest, outputDir string) *pipeline.Config {
 	if requested == "" {
 		requested = "profile:" + req.Profile
 	}
+	formats := req.Formats
+	if len(formats) == 0 {
+		formats = []string{"txt", "json", "manifest"}
+	}
 	return &pipeline.Config{
 		URL: req.SourceURL, SourceType: req.SourceType, SourceID: req.CanonicalID,
 		Title: req.Title, Creator: req.Creator, PublishedAt: req.PublishedAt,
@@ -385,7 +437,7 @@ func requestConfig(req JobRequest, outputDir string) *pipeline.Config {
 		ComputeType: req.ComputeType, CaptionMode: req.Captions,
 		AllowFallback: req.AllowFallback, MaxDuration: req.MaxDuration,
 		MaxFileSize: req.MaxFileSize, WordTimestamps: req.WordTimestamps,
-		Formats: []string{"txt", "json", "manifest"}, OutputDir: outputDir,
+		Formats: formats, OutputDir: outputDir, Backend: "remote",
 	}
 }
 

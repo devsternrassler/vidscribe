@@ -34,6 +34,7 @@ func WriteOutputs(cfg *Config, tx *TranscribeResult, meta *Metadata, logw io.Wri
 		Profile: cfg.Profile, Model: cfg.Model, Device: cfg.Device, ComputeType: cfg.ComputeType,
 		DetectedLanguage: tx.DetectedLanguage, Fallbacks: tx.Fallbacks, Degraded: len(tx.Fallbacks) > 0,
 		StartedAt: time.Now().UTC(), Dependencies: cfg.DependencyVersion,
+		Backend: firstNonEmpty(cfg.Backend, "local"),
 	}
 	return WriteOutputsDetailed(cfg, tx, meta, execution, logw)
 }

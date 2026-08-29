@@ -42,34 +42,36 @@ type ProgressEvent struct {
 
 // Config holds all parameters for a single transcription run.
 type Config struct {
-	URL                  string
-	SourceType           string
-	SourceID             string
-	Title                string
-	Creator              string
-	PublishedAt          string
-	RequestedEngine      string
-	Profile              string
-	Model                string
-	Language             string
-	OutputDir            string
-	CookiesBrowser       string
-	CookiesFile          string
-	JSRuntime            string
-	Formats              []string
-	Engine               string
-	Device               string
-	ComputeType          string
-	CaptionMode          string
-	AllowFallback        bool
-	MaxDuration          int
-	MaxFileSize          string
-	Verbose              bool
-	Overwrite            bool
-	WordTimestamps       bool
-	Progress             func(ProgressEvent)
-	DependencyVersion    map[string]string
-	SourceFallbackReason string
+	URL                   string
+	SourceType            string
+	SourceID              string
+	Title                 string
+	Creator               string
+	PublishedAt           string
+	RequestedEngine       string
+	Profile               string
+	Model                 string
+	Language              string
+	OutputDir             string
+	CookiesBrowser        string
+	CookiesFile           string
+	JSRuntime             string
+	Formats               []string
+	Engine                string
+	Device                string
+	ComputeType           string
+	CaptionMode           string
+	AllowFallback         bool
+	MaxDuration           int
+	MaxFileSize           string
+	Verbose               bool
+	Overwrite             bool
+	WordTimestamps        bool
+	Progress              func(ProgressEvent)
+	DependencyVersion     map[string]string
+	SourceFallbackReason  string
+	Backend               string
+	BackendFallbackReason string
 }
 
 // Metadata holds video information retrieved from yt-dlp.

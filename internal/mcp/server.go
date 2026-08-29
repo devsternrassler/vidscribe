@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/sternrassler/vidscribe/internal/deps"
 	"github.com/sternrassler/vidscribe/internal/pipeline"
+	"github.com/sternrassler/vidscribe/internal/remote"
 )
 
 var version = "dev"
@@ -67,7 +69,7 @@ func handleTranscribeVideo(ctx context.Context, req mcplib.CallToolRequest) (*mc
 		return mcplib.NewToolResultError("url is required"), nil
 	}
 
-	cfg := &pipeline.Config{
+	rawCfg := &pipeline.Config{
 		URL: rawURL, Profile: stringArg(args, "profile", pipeline.DefaultProfile),
 		Model: stringArg(args, "model", ""), Language: stringArg(args, "language", "auto"),
 		Engine: stringArg(args, "engine", ""), Formats: strings.Split(stringArg(args, "format", "txt,md"), ","),
@@ -78,26 +80,19 @@ func handleTranscribeVideo(ctx context.Context, req mcplib.CallToolRequest) (*mc
 		Overwrite:      boolArg(args, "overwrite", false),
 		WordTimestamps: boolArg(args, "word_timestamps", false),
 	}
-	if cfg.Engine != "" {
-		cfg.RequestedEngine = cfg.Engine
+	if rawCfg.Engine != "" {
+		rawCfg.RequestedEngine = rawCfg.Engine
 	} else {
-		cfg.RequestedEngine = "profile:" + cfg.Profile
+		rawCfg.RequestedEngine = "profile:" + rawCfg.Profile
 	}
-	cfg.CookiesBrowser, _ = args["cookies_browser"].(string)
-	cfg.CookiesFile, _ = args["cookies_file"].(string)
-	cfg.JSRuntime, _ = args["js_runtime"].(string)
-	if cfg.CookiesBrowser != "" && !allowedBrowsers[strings.ToLower(cfg.CookiesBrowser)] {
-		return mcplib.NewToolResultError("unsupported browser: " + cfg.CookiesBrowser), nil
+	rawCfg.CookiesBrowser, _ = args["cookies_browser"].(string)
+	rawCfg.CookiesFile, _ = args["cookies_file"].(string)
+	rawCfg.JSRuntime, _ = args["js_runtime"].(string)
+	if rawCfg.CookiesBrowser != "" && !allowedBrowsers[strings.ToLower(rawCfg.CookiesBrowser)] {
+		return mcplib.NewToolResultError("unsupported browser: " + rawCfg.CookiesBrowser), nil
 	}
-	if cfg.CookiesFile != "" {
-		if info, err := os.Stat(cfg.CookiesFile); err != nil || !info.Mode().IsRegular() {
-			return mcplib.NewToolResultError("cookies_file not found or not a regular file: " + cfg.CookiesFile), nil
-		}
-	}
-	if err := cfg.Normalize(ctx); err != nil {
-		return mcplib.NewToolResultError("invalid configuration: " + err.Error()), nil
-	}
-	if cfg.CaptionMode != "off" && cfg.Language == "auto" {
+	localCfg := *rawCfg
+	if rawCfg.CaptionMode != "off" && rawCfg.Language == "auto" {
 		return mcplib.NewToolResultError("captions require an explicit language"), nil
 	}
 	if err := validatePublicURL(ctx, rawURL); err != nil {
@@ -112,10 +107,10 @@ func handleTranscribeVideo(ctx context.Context, req mcplib.CallToolRequest) (*mc
 	if err != nil {
 		return mcplib.NewToolResultError("invalid output_dir: " + err.Error()), nil
 	}
-	cfg.OutputDir = out
-	if err := deps.Check(cfg.Engine); err != nil {
-		return mcplib.NewToolResultError(err.Error()), nil
-	}
+	localCfg.OutputDir = out
+	remoteCfg := *rawCfg
+	remoteCfg.OutputDir = out
+	remoteCfg.Formats = formatsWithManifest(rawCfg.Formats)
 
 	select {
 	case transcribeSlot <- struct{}{}:
@@ -137,7 +132,7 @@ func handleTranscribeVideo(ctx context.Context, req mcplib.CallToolRequest) (*mc
 	if req.Params.Meta != nil {
 		token = req.Params.Meta.ProgressToken
 	}
-	cfg.Progress = func(event pipeline.ProgressEvent) {
+	localCfg.Progress = func(event pipeline.ProgressEvent) {
 		if token == nil {
 			return
 		}
@@ -150,11 +145,45 @@ func handleTranscribeVideo(ctx context.Context, req mcplib.CallToolRequest) (*mc
 	}
 
 	var logBuf strings.Builder
-	runResult, err := pipeline.RunDetailed(runCtx, cfg, &logBuf)
+	var runResult *pipeline.RunResult
+	var remoteClient *remote.Client
+	if !routesLocally(rawURL) {
+		remoteClient, err = remote.NewFromEnvironment()
+		if err != nil {
+			return mcplib.NewToolResultError("invalid remote configuration: " + err.Error()), nil
+		}
+	}
+	if remoteClient != nil {
+		runResult, err = remoteClient.Run(runCtx, &remoteCfg)
+		if err != nil {
+			reason, allowed := remote.FallbackReason(err)
+			if !allowed {
+				return mcplib.NewToolResultError("Remote transcription failed without local fallback: " + err.Error()), nil
+			}
+			localCfg.Backend = "local"
+			localCfg.BackendFallbackReason = reason
+		}
+	}
+	if runResult == nil {
+		if localCfg.CookiesFile != "" {
+			if info, statErr := os.Stat(localCfg.CookiesFile); statErr != nil || !info.Mode().IsRegular() {
+				return mcplib.NewToolResultError("cookies_file not found or not a regular file: " + localCfg.CookiesFile), nil
+			}
+		}
+		if err := localCfg.Normalize(runCtx); err != nil {
+			return mcplib.NewToolResultError("invalid configuration: " + err.Error()), nil
+		}
+		if err := deps.Check(localCfg.Engine); err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		localCfg.Backend = "local"
+		runResult, err = pipeline.RunDetailed(runCtx, &localCfg, &logBuf)
+	}
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("Transcription failed: %v\n\nLog:\n%s", err, logBuf.String())), nil
 	}
-	resultText := fmt.Sprintf("Transcription complete.\nEngine: %s (requested: %s)\nLanguage: %s\nDegraded: %t\n\nFiles written:\n%s",
+	resultText := fmt.Sprintf("Transcription complete.\nBackend: %s\nEngine: %s (requested: %s)\nLanguage: %s\nDegraded: %t\n\nFiles written:\n%s",
+		runResult.Execution.Backend,
 		runResult.Execution.ActualEngine, runResult.Execution.RequestedEngine,
 		runResult.Execution.DetectedLanguage, runResult.Execution.Degraded, pipeline.FormatReport(runResult.Paths))
 	if preview := transcriptPreview(runResult.Paths); preview != "" {
@@ -166,6 +195,25 @@ func handleTranscribeVideo(ctx context.Context, req mcplib.CallToolRequest) (*mc
 	toolResult := mcplib.NewToolResultText(resultText)
 	toolResult.StructuredContent = runResult
 	return toolResult, nil
+}
+
+func formatsWithManifest(formats []string) []string {
+	result := append([]string{}, formats...)
+	for _, format := range result {
+		if strings.EqualFold(strings.TrimSpace(format), "manifest") {
+			return result
+		}
+	}
+	return append(result, "manifest")
+}
+
+func routesLocally(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "youtube.com" || host == "www.youtube.com" || host == "m.youtube.com" || host == "youtu.be" || strings.HasSuffix(host, ".youtube.com")
 }
 
 func checkDependenciesTool() mcplib.Tool {

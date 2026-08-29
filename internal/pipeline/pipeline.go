@@ -33,6 +33,7 @@ type ExecutionInfo struct {
 	StartedAt        time.Time         `json:"started_at"`
 	DurationMS       int64             `json:"duration_ms"`
 	RealtimeFactor   float64           `json:"realtime_factor"`
+	Backend          string            `json:"backend"`
 }
 
 // Run is the compatibility entry point for callers interested only in files.
@@ -83,6 +84,9 @@ func RunDetailed(ctx context.Context, cfg *Config, logw io.Writer) (*RunResult, 
 	defer os.RemoveAll(tx.TempDir)
 
 	fallbacks := append([]FallbackEvent{}, tx.Fallbacks...)
+	if cfg.BackendFallbackReason != "" {
+		fallbacks = append([]FallbackEvent{{From: "remote", To: "local", Reason: cfg.BackendFallbackReason}}, fallbacks...)
+	}
 	if cfg.SourceFallbackReason != "" {
 		fallbacks = append([]FallbackEvent{{From: "captions-" + cfg.CaptionMode, To: tx.ActualEngine, Reason: cfg.SourceFallbackReason}}, fallbacks...)
 	}
@@ -92,6 +96,7 @@ func RunDetailed(ctx context.Context, cfg *Config, logw io.Writer) (*RunResult, 
 		DetectedLanguage: tx.DetectedLanguage, Confidence: tx.Confidence, CaptionMode: cfg.CaptionMode,
 		Degraded: len(fallbacks) > 0, Fallbacks: fallbacks,
 		Dependencies: cfg.DependencyVersion, StartedAt: started,
+		Backend: firstNonEmpty(cfg.Backend, "local"),
 	}
 	cfg.emit(3, 4, "write", "Transkript und Provenienz werden atomar geschrieben")
 	paths, err := WriteOutputsDetailed(cfg, tx, meta, &execution, logw)
