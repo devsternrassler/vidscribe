@@ -4,7 +4,7 @@ package runtimeenv
 // passes. Keeping them here makes every CLI, MCP and dependency probe use the
 // same tested toolchain.
 const (
-	YTDLP              = "yt-dlp[default]@2026.7.4"
+	YTDLP              = "yt-dlp[default,curl-cffi]@2026.7.4"
 	WhisperCTranslate2 = "whisper-ctranslate2==0.5.7"
 	OpenAIWhisper      = "openai-whisper==20250625"
 	ONNXASR            = "onnx-asr[cpu,hub]==0.12.0"
