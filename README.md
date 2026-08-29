@@ -89,7 +89,9 @@ fail before downloading anything. Automatic engine fallback is off by default.
       "args": ["--mcp"],
       "env": {
         "VIDSCRIBE_OUTPUT_ROOT": "/absolute/path/to/transcripts",
-        "VIDSCRIBE_MAX_RUNTIME": "2h"
+        "VIDSCRIBE_MAX_RUNTIME": "2h",
+        "VIDSCRIBE_REMOTE_URL": "http://127.0.0.1:18083",
+        "VIDSCRIBE_REMOTE_TOKEN_FILE": "/absolute/path/to/remote-token"
       }
     }
   }
@@ -111,6 +113,17 @@ to yt-dlp, ffmpeg, uvx, and transcription subprocesses; Unix builds terminate th
 complete process group, while Windows uses the native direct-process cancellation.
 
 MCP startup has no installer side effects and does not write Claude command files.
+
+When both remote variables are configured, eligible MCP jobs run remote-first
+through a private SSH tunnel. `VIDSCRIBE_REMOTE_URL` deliberately accepts plain
+HTTP only on loopback; the token file must be absolute, regular, non-symlinked,
+at least 32 characters long, and mode `0600` or stricter. Cookies are never sent
+to the service. YouTube targets are routed directly to the local pipeline because
+datacenter extraction is unreliable. Transport failures, service `5xx` responses,
+and failed remote jobs visibly fall back to the local pipeline. Authentication,
+validation, security, protocol, cancellation, and local-output errors fail loud
+without fallback. The result and provenance manifest expose the actual backend
+and any fallback reason.
 
 ## HTTP job service
 
@@ -146,6 +159,7 @@ The response contains a deterministic job ID. Poll and fetch its artifacts:
 GET /v1/jobs/{id}
 GET /v1/jobs/{id}/transcript
 GET /v1/jobs/{id}/manifest
+GET /v1/jobs/{id}/artifacts/{txt|md|json|srt|vtt|manifest}
 GET /healthz
 GET /readyz
 GET /metrics
@@ -158,7 +172,9 @@ the real duration with FFprobe, and then pass the intact file to the common ASR
 pipeline. Arbitrary byte-range truncation is never used.
 
 The service defaults to loopback. Listening on another interface requires
-`VIDSCRIBE_API_TOKEN`; health and Prometheus metrics remain unauthenticated for
+`VIDSCRIBE_API_TOKEN` or `VIDSCRIBE_MCP_API_TOKEN`; both tokens are accepted
+independently so n8n and MCP credentials can be rotated separately. Health and
+Prometheus metrics remain unauthenticated for
 container orchestration. Media URLs must resolve exclusively to public IPs.
 
 ### Local container
@@ -185,6 +201,7 @@ and requires an explicit bind address and API token:
 VIDSCRIBE_IMAGE=ghcr.io/sternrassler/vidscribe:v0.4.0 \
 VIDSCRIBE_BIND_ADDRESS=10.20.0.3 \
 VIDSCRIBE_API_TOKEN='replace-me' \
+VIDSCRIBE_MCP_API_TOKEN='replace-with-a-distinct-token' \
   docker compose -f compose.prod.yaml config
 ```
 

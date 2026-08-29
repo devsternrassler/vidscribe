@@ -102,10 +102,11 @@ func newServeCommand() *cobra.Command {
 				return fmt.Errorf("invalid max runtime %q", maxRuntime)
 			}
 			token := os.Getenv("VIDSCRIBE_API_TOKEN")
-			if token == "" && !strings.HasPrefix(listen, "127.0.0.1:") && !strings.HasPrefix(listen, "localhost:") {
+			mcpToken := os.Getenv("VIDSCRIBE_MCP_API_TOKEN")
+			if token == "" && mcpToken == "" && !strings.HasPrefix(listen, "127.0.0.1:") && !strings.HasPrefix(listen, "localhost:") {
 				return fmt.Errorf("VIDSCRIBE_API_TOKEN is required when listening beyond loopback")
 			}
-			srv, err := service.New(service.Config{DataDir: dataDir, APIToken: token, MaxRuntime: runtimeLimit})
+			srv, err := service.New(service.Config{DataDir: dataDir, APITokens: []string{token, mcpToken}, MaxRuntime: runtimeLimit})
 			if err != nil {
 				return err
 			}

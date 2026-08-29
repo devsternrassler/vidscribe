@@ -91,6 +91,73 @@ func TestBearerAuthentication(t *testing.T) {
 	postJob(t, httpServer.URL, `{"source_url":"https://1.1.1.1/video"}`, "secret")
 }
 
+func TestMultipleBearerTokensAndEmptyEntries(t *testing.T) {
+	srv, err := New(Config{DataDir: t.TempDir(), APITokens: []string{"", "n8n-token", "mcp-token"}, Runner: func(context.Context, *pipeline.Config, io.Writer) (*pipeline.RunResult, error) {
+		return nil, nil
+	}, DependencyCheck: func(string) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+	for _, token := range []string{"n8n-token", "mcp-token"} {
+		postJob(t, httpServer.URL, `{"source_url":"https://1.1.1.1/video"}`, token)
+	}
+	req, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/jobs", strings.NewReader(`{"source_url":"https://1.1.1.1/video"}`))
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong token status=%d, want 401", resp.StatusCode)
+	}
+}
+
+func TestRequestedFormatsAndGenericArtifact(t *testing.T) {
+	var received []string
+	runner := func(_ context.Context, cfg *pipeline.Config, _ io.Writer) (*pipeline.RunResult, error) {
+		received = append([]string{}, cfg.Formats...)
+		if err := os.MkdirAll(cfg.OutputDir, 0o750); err != nil {
+			return nil, err
+		}
+		md := filepath.Join(cfg.OutputDir, "episode.md")
+		if err := os.WriteFile(md, []byte("# transcript"), 0o640); err != nil {
+			return nil, err
+		}
+		return &pipeline.RunResult{Paths: []string{md}, Metadata: &pipeline.Metadata{ID: "episode", Title: "episode"}}, nil
+	}
+	srv, err := New(Config{DataDir: t.TempDir(), Runner: runner, DependencyCheck: func(string) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv.Start(ctx)
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+	job := postJob(t, httpServer.URL, `{"source_url":"https://1.1.1.1/video","formats":["md"]}`, "")
+	waitForStatus(t, httpServer.URL, job.ID, StatusCompleted, "")
+	if len(received) != 1 || received[0] != "md" {
+		t.Fatalf("runner formats=%v, want [md]", received)
+	}
+	resp, err := http.Get(httpServer.URL + "/v1/jobs/" + job.ID + "/artifacts/md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(data) != "# transcript" {
+		t.Fatalf("artifact status=%d body=%q", resp.StatusCode, data)
+	}
+	bad, _ := http.Get(httpServer.URL + "/v1/jobs/" + job.ID + "/artifacts/exe")
+	bad.Body.Close()
+	if bad.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unsupported artifact status=%d, want 400", bad.StatusCode)
+	}
+}
+
 func TestRunningJobIsRecoveredAsQueued(t *testing.T) {
 	dataDir := t.TempDir()
 	jobsDir := filepath.Join(dataDir, "jobs")

@@ -105,6 +105,17 @@ func TestAllowedBrowsers(t *testing.T) {
 	}
 }
 
+func TestRoutesYouTubeLocally(t *testing.T) {
+	for _, target := range []string{"https://youtube.com/watch?v=x", "https://www.youtube.com/watch?v=x", "https://youtu.be/x", "https://music.youtube.com/watch?v=x"} {
+		if !routesLocally(target) {
+			t.Errorf("expected local route for %s", target)
+		}
+	}
+	if routesLocally("https://notyoutube.com/video") {
+		t.Fatal("lookalike domain must remain remote-eligible")
+	}
+}
+
 func TestTranscribeVideo_CookiesFileNotFound(t *testing.T) {
 	res, err := handleTranscribeVideo(context.Background(), makeReq(map[string]any{
 		"url":          "https://example.com/video",
