@@ -133,12 +133,52 @@ standardmaessig bis zu 30 Tage vorgehalten werden; Zero Data Retention muss auf
 Organisations- oder Projektebene geprueft werden:
 <https://platform.openai.com/docs/models/default-usage-policies-by-endpoint>.
 
+## CX33-Laufzeittest in Nuernberg
+
+Am 31. August 2026 lief ein isolierter temporaerer CX33 in `nbg1` mit Ubuntu
+24.04, demselben unveraenderten Image
+`ghcr.io/sternrassler/vidscribe:v0.5.1` und derselben Compose-Grenze von 4 vCPU
+und 8 GB RAM. Der konkrete CX33 stellte vier Shared-vCPU auf AMD EPYC Rome
+bereit; der produktive CPX32 laeuft auf AMD EPYC Genoa.
+
+Die Messung nutzte eine neu erzeugte 180-Sekunden-WAV aus derselben
+Deutschlandfunk-Quelle wie der fruehere DE-Fall. Ihr SHA-256 war
+`e93ae9b544d9698d425262525be42d1331bebbc6dae855f5abd340d2c88f676f`.
+Da dieser Hash nicht dem frueheren DE-Fixture-Hash entspricht, ist der Vergleich
+mit der vorhandenen CPX32-Baseline kein byte-identischer A/B-Lauf. Quelle,
+Ausschnitt und Dauer stimmen jedoch ueberein; der sehr grosse Whisper-Abstand
+ist deshalb ein belastbares Ausschluss-Signal, aber keine allgemeine Aussage
+ueber jeden kuenftigen CX33-Host.
+
+Erstlaeufe zum Paket-, Modell- und Cache-Aufbau wurden nicht gewertet. Vor
+jedem gewerteten Lauf wurde der Testcontainer neu erstellt, waehrend die
+Modell-Caches im Volume erhalten blieben. Dadurch stammt der RAM-Peak jeweils
+aus einem frischen Container-Cgroup. Alle Jobs liefen ueber den echten
+HTTP-Servicepfad.
+
+| Engine | CX33-Laeufe | Median | Gegen CPX32-DE-Baseline | Max. RAM-Peak | Max. Health-Latenz |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Parakeet | 33,519 / 36,712 / 37,690 s | 36,712 s | +23,9 % | 3,46 GiB | 12,0 ms |
+| Whisper Large-v3 | 634,984 / 544,884 / 581,455 s | 581,455 s | +240,7 % | 6,69 GiB | 9,2 ms |
+
+Die Streuung zwischen schnellstem und langsamstem Lauf betrug bei Parakeet
+12,4 Prozent und bei Whisper 16,5 Prozent. Kein Lauf erzeugte einen OOM, einen
+Health-Ausfall oder einen Containerneustart. Parakeet bestand damit das vorab
+gesetzte Kriterium von hoechstens 30 Prozent Laufzeitverlust. Whisper verfehlte
+das Kriterium von hoechstens 20 Prozent klar und erreichte im Median nur rund
+0,31-fache Echtzeit statt ungefaehr Echtzeit auf dem CPX32.
+
+Der temporaere Server, seine temporaere Firewall, die restriktive
+Fixture-Freigabe und alle Fixture-Dateien wurden nach der Messung entfernt.
+Produktiv-DNS, Tunnel, Tokens und Routing blieben unveraendert; der produktive
+Health-Check war nach dem Rueckbau gruen.
+
 ## Betriebsoptionen: vorlaeufige Einordnung
 
 | Option | Zwischenbewertung |
 | --- | --- |
 | CPX32 unveraendert | Einzige kurzfristig durch reale Messungen gedeckte Option; 3-Minuten-Laeufe beider Engines und ein rund 200-minuetiger Parakeet-Job funktionieren, der instrumentierte Whisper-Langformlauf fehlt. Der Tarif ist nach der Preisanpassung teuer. |
-| CX33 | Gleiche nominelle 4-vCPU-/8-GB-Klasse und deutlich guenstiger, aber Shared-Cost-Optimized statt AMD-Regular; vor Migration ist derselbe Benchmark auf einer temporaeren CX33 noetig. |
+| CX33 | Gleiche nominelle 4-vCPU-/8-GB-Klasse und deutlich guenstiger. Der reale Nuernberg-Test bestand fuer Parakeet, war mit Whisper Large-v3 im Median aber rund 3,4-mal so langsam wie die vorhandene CPX32-DE-Baseline. Fuer den aktuellen gemischten Engine-Vertrag deshalb kein geeigneter Ersatz. |
 | Nur on-demand | Spart Leerlaufkosten, erhoeht aber Betriebs- und Startkomplexitaet und widerspricht einem jederzeit erreichbaren primaeren Backend, solange keine robuste Aktivierungslogik existiert. |
 | `gpt-transcribe` Opt-in | Sehr schnell und insbesondere fuer EN qualitativ stark, erfuellt aber ohne zusaetzliches Alignment den bestehenden SRT/VTT-/Zeitstempelvertrag nicht. Fuer reine TXT-Jobs bleibt ein budgetbegrenztes Opt-in plausibel. |
 
@@ -152,10 +192,11 @@ Seit dem 15. Juni 2026 nennt Hetzner fuer Deutschland/Finnland monatlich
    weiterbetreiben; Parakeet bleibt fuer schnelle Standardjobs sinnvoll.
 2. Whisper Large-v3 als explizites Qualitaetsprofil fuer Deutsch und schwierige
    Inhalte beibehalten; der CPX32 schafft es ungefaehr in Echtzeit.
-3. Vor einem Tarifwechsel denselben Container und Benchmark auf einer
-   temporaeren CX33 zu mehreren Tageszeiten messen, damit Shared-CPU-Streuung
-   sichtbar wird. Bei stabiler Laufzeit und ohne OOM ist CX33 der
-   wirtschaftlich naheliegende Zielhost.
+3. Nicht auf CX33 wechseln, solange Whisper Large-v3 Bestandteil des lokalen
+   Engine-Vertrags bleibt. Der reale Nuernberg-Test war zwar stabil und ohne
+   OOM, verfehlte das Whisper-Laufzeitziel aber eindeutig. Eine spaetere
+   Neubewertung ist nur bei geaendertem Engine-Vertrag oder einer anderen
+   nachweislich schnelleren Tarifklasse sinnvoll.
 4. Noch keine OpenAI-Engine in den allgemeinen Profilpfad implementieren. Ein
    TXT-only-Opt-in ist erst nach einem expliziten Outputvertrag, einem
    dedizierten budgetbegrenzten API-Projekt und einem Chunking-Test sinnvoll.
@@ -169,7 +210,5 @@ Seit dem 15. Juni 2026 nennt Hetzner fuer Deutschland/Finnland monatlich
 - Obergrenze und Chunk-Rekonstruktion oberhalb der bereits bestaetigten
   34.560.290 Byte bestimmen
 - Alignment-Konzept fuer SRT/VTT und Zeitstempel bei `gpt-transcribe`
-- temporaere CX33-Laeufe zu mehreren Tageszeiten mit identischem Image und
-  denselben Fixture-Hashes
 - instrumentierter Whisper-Langformlauf mit Speicher-Peak und OOM-Marge
 - mindestens ein langer und ein musik-/stillehaltiger Fall
