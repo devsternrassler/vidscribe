@@ -68,16 +68,18 @@ type Config struct {
 	DataDir         string
 	APIToken        string
 	APITokens       []string
+	AllowedEngines  []string
 	MaxRuntime      time.Duration
 	Runner          Runner
 	DependencyCheck func(string) error
 }
 
 type Server struct {
-	cfg   Config
-	mu    sync.RWMutex
-	jobs  map[string]*Job
-	queue chan string
+	cfg            Config
+	allowedEngines map[string]struct{}
+	mu             sync.RWMutex
+	jobs           map[string]*Job
+	queue          chan string
 }
 
 func New(cfg Config) (*Server, error) {
@@ -93,6 +95,10 @@ func New(cfg Config) (*Server, error) {
 	if cfg.DependencyCheck == nil {
 		cfg.DependencyCheck = deps.Check
 	}
+	allowedEngines, err := normalizeAllowedEngines(cfg.AllowedEngines)
+	if err != nil {
+		return nil, err
+	}
 	absDataDir, err := filepath.Abs(cfg.DataDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve service data directory: %w", err)
@@ -103,7 +109,7 @@ func New(cfg Config) (*Server, error) {
 			return nil, fmt.Errorf("create service data directory: %w", err)
 		}
 	}
-	s := &Server{cfg: cfg, jobs: map[string]*Job{}, queue: make(chan string, 128)}
+	s := &Server{cfg: cfg, allowedEngines: allowedEngines, jobs: map[string]*Job{}, queue: make(chan string, 128)}
 	if err := s.loadJobs(); err != nil {
 		return nil, err
 	}
@@ -191,6 +197,10 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if _, err := s.normalizedConfig(r.Context(), req, ""); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	id := jobID(req)
 
 	s.mu.Lock()
@@ -256,14 +266,39 @@ func normalizeRequest(ctx context.Context, req *JobRequest) error {
 	if req.MaxFileSize == "" {
 		req.MaxFileSize = pipeline.DefaultMaxFileSize
 	}
-	cfg := requestConfig(*req, "")
-	if err := cfg.Normalize(ctx); err != nil {
-		return fmt.Errorf("invalid transcription configuration: %w", err)
-	}
 	if req.Captions != "off" && req.Language == "auto" {
 		return fmt.Errorf("captions require an explicit language")
 	}
 	return nil
+}
+
+func normalizeAllowedEngines(values []string) (map[string]struct{}, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	valid := map[string]struct{}{"faster": {}, "openai": {}, "parakeet": {}}
+	allowed := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		engine := strings.ToLower(strings.TrimSpace(value))
+		if _, ok := valid[engine]; !ok {
+			return nil, fmt.Errorf("invalid allowed service engine %q (want faster|openai|parakeet)", value)
+		}
+		allowed[engine] = struct{}{}
+	}
+	return allowed, nil
+}
+
+func (s *Server) normalizedConfig(ctx context.Context, req JobRequest, outputDir string) (*pipeline.Config, error) {
+	cfg := requestConfig(req, outputDir)
+	if err := cfg.Normalize(ctx); err != nil {
+		return nil, fmt.Errorf("invalid transcription configuration: %w", err)
+	}
+	if len(s.allowedEngines) > 0 {
+		if _, ok := s.allowedEngines[cfg.Engine]; !ok {
+			return nil, fmt.Errorf("transcription engine %q is not allowed by service policy", cfg.Engine)
+		}
+	}
+	return cfg, nil
 }
 
 func jobID(req JobRequest) string {
@@ -371,6 +406,23 @@ func (s *Server) worker(ctx context.Context) {
 }
 
 func (s *Server) process(parent context.Context, id string) {
+	s.mu.RLock()
+	queued := s.jobs[id]
+	if queued == nil || queued.Status != StatusQueued {
+		s.mu.RUnlock()
+		return
+	}
+	req := queued.Request
+	s.mu.RUnlock()
+
+	outDir := filepath.Join(s.cfg.DataDir, "artifacts", id)
+	resolvedCfg, err := s.normalizedConfig(parent, req, outDir)
+	if err != nil {
+		s.finish(id, nil, err)
+		return
+	}
+	cfg := requestConfig(req, outDir)
+
 	s.mu.Lock()
 	job := s.jobs[id]
 	if job == nil || job.Status != StatusQueued {
@@ -380,12 +432,10 @@ func (s *Server) process(parent context.Context, id string) {
 	now := time.Now().UTC()
 	job.Status, job.StartedAt, job.Error = StatusRunning, &now, ""
 	_ = s.persistLocked(job)
-	req := job.Request
 	s.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(parent, s.cfg.MaxRuntime)
 	defer cancel()
-	outDir := filepath.Join(s.cfg.DataDir, "artifacts", id)
 	if err := os.RemoveAll(outDir); err != nil {
 		s.finish(id, nil, fmt.Errorf("clean artifact directory: %w", err))
 		return
@@ -394,7 +444,6 @@ func (s *Server) process(parent context.Context, id string) {
 		s.finish(id, nil, fmt.Errorf("create artifact directory: %w", err))
 		return
 	}
-	cfg := requestConfig(req, outDir)
 	cfg.Progress = func(event pipeline.ProgressEvent) {
 		s.mu.Lock()
 		if current := s.jobs[id]; current != nil && current.Status == StatusRunning {
@@ -404,7 +453,7 @@ func (s *Server) process(parent context.Context, id string) {
 		}
 		s.mu.Unlock()
 	}
-	if err := s.cfg.DependencyCheck(cfg.Engine); err != nil {
+	if err := s.cfg.DependencyCheck(resolvedCfg.Engine); err != nil {
 		s.finish(id, nil, err)
 		return
 	}

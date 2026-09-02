@@ -137,6 +137,20 @@ VIDSCRIBE_API_TOKEN=local-test \
   vidscribe serve --listen 127.0.0.1:8080 --data-dir ./vidscribe-data
 ```
 
+Set `VIDSCRIBE_SERVICE_ALLOWED_ENGINES` to a comma-separated allowlist when a
+remote worker must only execute selected transcription engines. The check uses
+the engine resolved after profile normalization and is repeated for recovered
+jobs before processing. For example, a Parakeet-only worker uses:
+
+```bash
+VIDSCRIBE_SERVICE_ALLOWED_ENGINES=parakeet vidscribe serve
+```
+
+If the variable is unset or empty, all supported engines remain available.
+Disallowed requests fail with HTTP 400 before a job is persisted; disallowed
+jobs recovered from disk are marked failed without starting a dependency or
+transcription subprocess.
+
 Submit a direct podcast enclosure or audio URL:
 
 ```bash

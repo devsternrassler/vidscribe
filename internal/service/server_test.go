@@ -179,6 +179,117 @@ func TestRunningJobIsRecoveredAsQueued(t *testing.T) {
 	}
 }
 
+func TestAllowedEnginePolicyRejectsResolvedEngineBeforePersistence(t *testing.T) {
+	dataDir := t.TempDir()
+	runs := 0
+	checks := 0
+	srv, err := New(Config{
+		DataDir: dataDir, AllowedEngines: []string{" parakeet "},
+		Runner: func(context.Context, *pipeline.Config, io.Writer) (*pipeline.RunResult, error) {
+			runs++
+			return nil, nil
+		},
+		DependencyCheck: func(string) error {
+			checks++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+
+	resp, err := http.Post(httpServer.URL+"/v1/jobs", "application/json", strings.NewReader(`{"source_url":"https://1.1.1.1/video","profile":"quality"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(data), `engine \"faster\" is not allowed`) {
+		t.Fatalf("status=%d body=%s, want resolved faster rejection", resp.StatusCode, data)
+	}
+	entries, err := os.ReadDir(filepath.Join(dataDir, "jobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 || runs != 0 || checks != 0 {
+		t.Fatalf("jobs=%d runs=%d dependency_checks=%d, want all zero", len(entries), runs, checks)
+	}
+}
+
+func TestAllowedEnginePolicyAcceptsResolvedParakeet(t *testing.T) {
+	var checkedEngine string
+	srv, err := New(Config{
+		DataDir: t.TempDir(), AllowedEngines: []string{"parakeet"},
+		Runner: func(_ context.Context, _ *pipeline.Config, _ io.Writer) (*pipeline.RunResult, error) {
+			return &pipeline.RunResult{}, nil
+		},
+		DependencyCheck: func(engine string) error {
+			checkedEngine = engine
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv.Start(ctx)
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+	job := postJob(t, httpServer.URL, `{"source_url":"https://1.1.1.1/video","profile":"gpu-free"}`, "")
+	waitForStatus(t, httpServer.URL, job.ID, StatusCompleted, "")
+	if checkedEngine != "parakeet" {
+		t.Fatalf("dependency-check engine=%q, want parakeet", checkedEngine)
+	}
+}
+
+func TestAllowedEnginePolicyFailsRecoveredDisallowedJob(t *testing.T) {
+	dataDir := t.TempDir()
+	jobsDir := filepath.Join(dataDir, "jobs")
+	if err := os.MkdirAll(jobsDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	job := Job{
+		ID: "blocked-recovery", Status: StatusRunning,
+		Request:   JobRequest{SourceType: "video", SourceURL: "https://1.1.1.1/video", Profile: "quality", Language: "auto", Captions: "off", MaxDuration: pipeline.DefaultMaxDuration, MaxFileSize: pipeline.DefaultMaxFileSize},
+		CreatedAt: time.Now(),
+	}
+	data, _ := json.Marshal(job)
+	if err := os.WriteFile(filepath.Join(jobsDir, job.ID+".json"), data, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	runs := 0
+	srv, err := New(Config{
+		DataDir: dataDir, AllowedEngines: []string{"parakeet"},
+		Runner: func(context.Context, *pipeline.Config, io.Writer) (*pipeline.RunResult, error) {
+			runs++
+			return nil, nil
+		},
+		DependencyCheck: func(string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv.Start(ctx)
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+	failed := waitForStatus(t, httpServer.URL, job.ID, StatusFailed, "")
+	if runs != 0 || !strings.Contains(failed.Error, `engine "faster" is not allowed`) {
+		t.Fatalf("runs=%d failed=%+v", runs, failed)
+	}
+}
+
+func TestAllowedEnginePolicyRejectsInvalidConfiguration(t *testing.T) {
+	_, err := New(Config{DataDir: t.TempDir(), AllowedEngines: []string{"parakeeet"}})
+	if err == nil || !strings.Contains(err.Error(), "invalid allowed service engine") {
+		t.Fatalf("error=%v, want invalid engine", err)
+	}
+}
+
 func postJob(t *testing.T, baseURL, body, token string) Job {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, baseURL+"/v1/jobs", bytes.NewBufferString(body))

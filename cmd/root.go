@@ -103,10 +103,14 @@ func newServeCommand() *cobra.Command {
 			}
 			token := os.Getenv("VIDSCRIBE_API_TOKEN")
 			mcpToken := os.Getenv("VIDSCRIBE_MCP_API_TOKEN")
+			allowedEngines := splitNonEmpty(os.Getenv("VIDSCRIBE_SERVICE_ALLOWED_ENGINES"))
 			if token == "" && mcpToken == "" && !strings.HasPrefix(listen, "127.0.0.1:") && !strings.HasPrefix(listen, "localhost:") {
 				return fmt.Errorf("VIDSCRIBE_API_TOKEN is required when listening beyond loopback")
 			}
-			srv, err := service.New(service.Config{DataDir: dataDir, APITokens: []string{token, mcpToken}, MaxRuntime: runtimeLimit})
+			srv, err := service.New(service.Config{
+				DataDir: dataDir, APITokens: []string{token, mcpToken},
+				AllowedEngines: allowedEngines, MaxRuntime: runtimeLimit,
+			})
 			if err != nil {
 				return err
 			}
@@ -130,6 +134,16 @@ func newServeCommand() *cobra.Command {
 	command.Flags().StringVar(&dataDir, "data-dir", "./vidscribe-data", "Persistent job and artifact directory")
 	command.Flags().StringVar(&maxRuntime, "max-runtime", "6h", "Maximum runtime per job")
 	return command
+}
+
+func splitNonEmpty(value string) []string {
+	var values []string
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			values = append(values, item)
+		}
+	}
+	return values
 }
 
 func newQualityEvalCommand() *cobra.Command {
