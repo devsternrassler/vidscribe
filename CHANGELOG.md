@@ -4,6 +4,17 @@ Alle wesentlichen Änderungen an vidscribe werden in dieser Datei dokumentiert.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-02
+
+### Added
+
+- Opt-in-Allowlist `VIDSCRIBE_SERVICE_ALLOWED_ENGINES` fuer Remote-Dienste.
+  Profile werden vor der Entscheidung auf ihre tatsaechliche Engine aufgeloest;
+  nicht erlaubte neue und wiederaufgenommene Jobs starten weder Download noch
+  Transkription.
+- Dokumentierte Neubewertung der produktiven Transkriptions-Backends samt
+  realem CX33-Vergleich als Grundlage fuer den Parakeet-only-Betrieb.
+
 ## [0.5.1] - 2026-08-29
 
 ### Fixed
@@ -106,7 +117,8 @@ Alle wesentlichen Änderungen an vidscribe werden in dieser Datei dokumentiert.
 
 - GoReleaser-Owner nach dem Repository-Umzug korrigiert.
 
-[Unreleased]: https://github.com/Sternrassler/vidscribe/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/Sternrassler/vidscribe/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Sternrassler/vidscribe/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Sternrassler/vidscribe/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Sternrassler/vidscribe/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Sternrassler/vidscribe/compare/v0.3.0...v0.4.0
