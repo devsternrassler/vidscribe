@@ -4,6 +4,12 @@ Alle wesentlichen Änderungen an vidscribe werden in dieser Datei dokumentiert.
 
 ## [Unreleased]
 
+### Added
+
+- Sichere, standardmäßig deaktivierte Retention für terminale HTTP-Jobs mit
+  getrennten Fristen für erfolgreiche und fehlgeschlagene Jobs, Dry-run,
+  Prometheus-Metriken und Lösch-Read-back für Metadaten plus Artefakte.
+
 ## [0.6.0] - 2026-09-02
 
 ### Added
