@@ -65,21 +65,29 @@ type Job struct {
 type Runner func(context.Context, *pipeline.Config, io.Writer) (*pipeline.RunResult, error)
 
 type Config struct {
-	DataDir         string
-	APIToken        string
-	APITokens       []string
-	AllowedEngines  []string
-	MaxRuntime      time.Duration
-	Runner          Runner
-	DependencyCheck func(string) error
+	DataDir            string
+	APIToken           string
+	APITokens          []string
+	AllowedEngines     []string
+	MaxRuntime         time.Duration
+	Runner             Runner
+	DependencyCheck    func(string) error
+	RetentionCompleted time.Duration
+	RetentionFailed    time.Duration
+	RetentionInterval  time.Duration
+	RetentionDryRun    bool
 }
 
 type Server struct {
-	cfg            Config
-	allowedEngines map[string]struct{}
-	mu             sync.RWMutex
-	jobs           map[string]*Job
-	queue          chan string
+	cfg                      Config
+	allowedEngines           map[string]struct{}
+	mu                       sync.RWMutex
+	jobs                     map[string]*Job
+	queue                    chan string
+	retentionCandidatesTotal map[string]uint64
+	retentionDeletedTotal    map[string]uint64
+	retentionErrorsTotal     uint64
+	retentionLastRun         time.Time
 }
 
 func New(cfg Config) (*Server, error) {
@@ -95,6 +103,12 @@ func New(cfg Config) (*Server, error) {
 	if cfg.DependencyCheck == nil {
 		cfg.DependencyCheck = deps.Check
 	}
+	if cfg.RetentionCompleted < 0 || cfg.RetentionFailed < 0 || cfg.RetentionInterval < 0 {
+		return nil, fmt.Errorf("retention durations must not be negative")
+	}
+	if (cfg.RetentionCompleted > 0 || cfg.RetentionFailed > 0) && cfg.RetentionInterval == 0 {
+		return nil, fmt.Errorf("retention interval must be positive when retention is enabled")
+	}
 	allowedEngines, err := normalizeAllowedEngines(cfg.AllowedEngines)
 	if err != nil {
 		return nil, err
@@ -109,7 +123,11 @@ func New(cfg Config) (*Server, error) {
 			return nil, fmt.Errorf("create service data directory: %w", err)
 		}
 	}
-	s := &Server{cfg: cfg, allowedEngines: allowedEngines, jobs: map[string]*Job{}, queue: make(chan string, 128)}
+	s := &Server{
+		cfg: cfg, allowedEngines: allowedEngines, jobs: map[string]*Job{}, queue: make(chan string, 128),
+		retentionCandidatesTotal: map[string]uint64{StatusCompleted: 0, StatusFailed: 0},
+		retentionDeletedTotal:    map[string]uint64{StatusCompleted: 0, StatusFailed: 0},
+	}
 	if err := s.loadJobs(); err != nil {
 		return nil, err
 	}
@@ -118,6 +136,9 @@ func New(cfg Config) (*Server, error) {
 
 func (s *Server) Start(ctx context.Context) {
 	go s.worker(ctx)
+	if s.cfg.RetentionCompleted > 0 || s.cfg.RetentionFailed > 0 {
+		go s.retentionLoop(ctx.Done())
+	}
 	s.mu.RLock()
 	var pending []string
 	for id, job := range s.jobs {
@@ -369,10 +390,26 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 	for _, job := range s.jobs {
 		counts[job.Status]++
 	}
+	candidates := map[string]uint64{}
+	deleted := map[string]uint64{}
+	for _, status := range []string{StatusCompleted, StatusFailed} {
+		candidates[status] = s.retentionCandidatesTotal[status]
+		deleted[status] = s.retentionDeletedTotal[status]
+	}
+	errorsTotal := s.retentionErrorsTotal
+	lastRun := s.retentionLastRun
 	s.mu.RUnlock()
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	for _, status := range []string{StatusQueued, StatusRunning, StatusCompleted, StatusFailed} {
 		fmt.Fprintf(w, "vidscribe_jobs{status=%q} %d\n", status, counts[status])
+	}
+	for _, status := range []string{StatusCompleted, StatusFailed} {
+		fmt.Fprintf(w, "vidscribe_retention_candidates_total{status=%q} %d\n", status, candidates[status])
+		fmt.Fprintf(w, "vidscribe_retention_deleted_total{status=%q} %d\n", status, deleted[status])
+	}
+	fmt.Fprintf(w, "vidscribe_retention_errors_total %d\n", errorsTotal)
+	if !lastRun.IsZero() {
+		fmt.Fprintf(w, "vidscribe_retention_last_run_timestamp_seconds %d\n", lastRun.Unix())
 	}
 }
 

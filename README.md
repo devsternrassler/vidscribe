@@ -151,6 +151,49 @@ Disallowed requests fail with HTTP 400 before a job is persisted; disallowed
 jobs recovered from disk are marked failed without starting a dependency or
 transcription subprocess.
 
+### Persistenz und Aufbewahrung
+
+Der laufende Dienst ist alleiniger Eigentümer von `data-dir`: `jobs/` enthält
+die Queue-Metadaten, `artifacts/` die zugehörigen Worker-Ausgaben. `queued` und
+`running` sind aktive Arbeitsdaten und werden nie automatisch bereinigt.
+`completed` ist zugleich der idempotente Ergebnis-Cache, `failed` hält
+Diagnosedaten. Beide terminalen Klassen können getrennt und ausschließlich über
+`finished_at` befristet werden; standardmäßig ist die Bereinigung mit `0`
+deaktiviert. Sobald eine Frist aktiv ist, muss das Sweep-Intervall positiv sein:
+
+```bash
+VIDSCRIBE_RETENTION_COMPLETED=720h \
+VIDSCRIBE_RETENTION_FAILED=168h \
+VIDSCRIBE_RETENTION_INTERVAL=24h \
+VIDSCRIBE_RETENTION_DRY_RUN=true \
+  vidscribe serve
+```
+
+Die entsprechenden Flags heißen `--retention-completed`,
+`--retention-failed`, `--retention-interval` und `--retention-dry-run`. Eine
+neue Policy sollte zuerst mindestens einen vollständigen Intervall-Zyklus im
+Dry-run laufen. Jeder Sweep sperrt den Jobzustand, verschiebt Metadaten und
+Artefakte gemeinsam aus dem aktiven Namensraum und prüft deren Abwesenheit vor
+dem endgültigen Entfernen. Fehlende Artefakte eines terminalen Jobs gelten
+nicht als Fehler; fehlende Job-Metadaten und terminale Jobs ohne `finished_at`
+werden nicht stillschweigend bereinigt.
+
+`/metrics` meldet Kandidaten und Löschungen pro Status sowie Fehler und den
+Zeitpunkt des letzten Sweeps (`vidscribe_retention_*`). Nach Ablauf eines
+`completed`-Eintrags ist dessen Idempotenz-Cache bewusst beendet: dieselbe
+Anfrage erzeugt dann wieder einen Job. Die Volume-Sicherung ist eine
+Wiederherstellungshilfe für den Dienst, kein dauerhaftes Transkriptarchiv;
+bereits durch Clients exportierte Ausgaben liegen außerhalb dieser Policy.
+Kann das abschließende Entfernen eines bereits aus dem aktiven Namensraum
+verschobenen Staging-Verzeichnisses nicht beendet werden, steigt der
+Fehlerzähler; der nächste nicht-trockene Sweep versucht die Restdaten erneut zu
+entfernen. Nicht als `purge-ready` markierte Staging-Daten werden nie automatisch
+gelöscht, sondern als manueller Wiederherstellungsfall gemeldet. Der
+Kandidaten-Counter zählt Sweep-Ereignisse, nicht unterschiedliche Job-IDs.
+Ein Abruf genau an der TTL-Grenze kann mit der gleichzeitig erfolgenden
+Bereinigung kollidieren und sollte vom Client wie ein abgelaufener Cache-Miss
+behandelt werden.
+
 Submit a direct podcast enclosure or audio URL:
 
 ```bash
@@ -216,6 +259,9 @@ VIDSCRIBE_IMAGE=ghcr.io/sternrassler/vidscribe:v0.4.0 \
 VIDSCRIBE_BIND_ADDRESS=10.20.0.3 \
 VIDSCRIBE_API_TOKEN='replace-me' \
 VIDSCRIBE_MCP_API_TOKEN='replace-with-a-distinct-token' \
+VIDSCRIBE_RETENTION_COMPLETED=720h \
+VIDSCRIBE_RETENTION_FAILED=168h \
+VIDSCRIBE_RETENTION_DRY_RUN=true \
   docker compose -f compose.prod.yaml config
 ```
 

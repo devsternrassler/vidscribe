@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,6 +93,8 @@ func init() {
 
 func newServeCommand() *cobra.Command {
 	var listen, dataDir, maxRuntime string
+	var retentionCompleted, retentionFailed, retentionInterval string
+	var retentionDryRun bool
 	command := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the durable HTTP transcription job service",
@@ -100,6 +103,26 @@ func newServeCommand() *cobra.Command {
 			runtimeLimit, err := time.ParseDuration(maxRuntime)
 			if err != nil || runtimeLimit <= 0 {
 				return fmt.Errorf("invalid max runtime %q", maxRuntime)
+			}
+			completedTTL, err := parseNonNegativeDuration("retention completed", retentionCompleted)
+			if err != nil {
+				return err
+			}
+			failedTTL, err := parseNonNegativeDuration("retention failed", retentionFailed)
+			if err != nil {
+				return err
+			}
+			interval, err := parseNonNegativeDuration("retention interval", retentionInterval)
+			if err != nil {
+				return err
+			}
+			if !cmd.Flags().Changed("retention-dry-run") {
+				if raw := strings.TrimSpace(os.Getenv("VIDSCRIBE_RETENTION_DRY_RUN")); raw != "" {
+					retentionDryRun, err = strconv.ParseBool(raw)
+					if err != nil {
+						return fmt.Errorf("invalid VIDSCRIBE_RETENTION_DRY_RUN %q", raw)
+					}
+				}
 			}
 			token := os.Getenv("VIDSCRIBE_API_TOKEN")
 			mcpToken := os.Getenv("VIDSCRIBE_MCP_API_TOKEN")
@@ -110,6 +133,8 @@ func newServeCommand() *cobra.Command {
 			srv, err := service.New(service.Config{
 				DataDir: dataDir, APITokens: []string{token, mcpToken},
 				AllowedEngines: allowedEngines, MaxRuntime: runtimeLimit,
+				RetentionCompleted: completedTTL, RetentionFailed: failedTTL,
+				RetentionInterval: interval, RetentionDryRun: retentionDryRun,
 			})
 			if err != nil {
 				return err
@@ -133,7 +158,26 @@ func newServeCommand() *cobra.Command {
 	command.Flags().StringVar(&listen, "listen", "127.0.0.1:8080", "HTTP listen address")
 	command.Flags().StringVar(&dataDir, "data-dir", "./vidscribe-data", "Persistent job and artifact directory")
 	command.Flags().StringVar(&maxRuntime, "max-runtime", "6h", "Maximum runtime per job")
+	command.Flags().StringVar(&retentionCompleted, "retention-completed", envOrDefault("VIDSCRIBE_RETENTION_COMPLETED", "0"), "Delete completed jobs older than this duration (0 disables)")
+	command.Flags().StringVar(&retentionFailed, "retention-failed", envOrDefault("VIDSCRIBE_RETENTION_FAILED", "0"), "Delete failed jobs older than this duration (0 disables)")
+	command.Flags().StringVar(&retentionInterval, "retention-interval", envOrDefault("VIDSCRIBE_RETENTION_INTERVAL", "24h"), "Interval between retention sweeps")
+	command.Flags().BoolVar(&retentionDryRun, "retention-dry-run", false, "Report retention candidates without deleting them")
 	return command
+}
+
+func parseNonNegativeDuration(name, value string) (time.Duration, error) {
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < 0 {
+		return 0, fmt.Errorf("invalid %s duration %q", name, value)
+	}
+	return duration, nil
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func splitNonEmpty(value string) []string {
