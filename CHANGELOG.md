@@ -4,6 +4,8 @@ Alle wesentlichen Änderungen an vidscribe werden in dieser Datei dokumentiert.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-06
+
 ### Added
 
 - Sichere, standardmäßig deaktivierte Retention für terminale HTTP-Jobs mit
@@ -123,7 +125,8 @@ Alle wesentlichen Änderungen an vidscribe werden in dieser Datei dokumentiert.
 
 - GoReleaser-Owner nach dem Repository-Umzug korrigiert.
 
-[Unreleased]: https://github.com/Sternrassler/vidscribe/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Sternrassler/vidscribe/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Sternrassler/vidscribe/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Sternrassler/vidscribe/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Sternrassler/vidscribe/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Sternrassler/vidscribe/compare/v0.4.0...v0.5.0
